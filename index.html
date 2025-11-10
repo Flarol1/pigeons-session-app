@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Join or Create Session</title>
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #f4f4f4;
+      margin: 50px;
+      color: #333;
+    }
+    #session {
+      padding: 20px;
+      border-radius: 8px;
+      background-color: #ffffff;
+      box-shadow: 0px 0px 8px rgba(0, 0, 0, 0.1);
+      max-width: 500px;
+      margin: 20px auto;
+    }
+    button {
+      padding: 10px 20px;
+      margin: 10px 5px;
+      background-color: #2e9742;
+      color: white;
+      border: none;
+      cursor: pointer;
+      border-radius: 4px;
+    }
+    button:hover {
+      background-color: #258137;
+    }
+    input[type="text"] {
+      padding: 10px;
+      width: 90%;
+      margin: 10px 5px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 1rem;
+    }
+    h2, h3 {
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <h2>Create or Join a Session</h2>
+
+  <div id="session">
+    <label for="sessionId">Session Name:</label>
+    <input type="text" id="sessionId" placeholder="Enter a name (e.g., night-1)" />
+
+    <div>
+      <button id="createSession">Create Session</button>
+      <button id="joinSession">Join Session</button>
+    </div>
+
+    <div id="sessionIdDisplay" style="display:none; margin-top:10px; font-weight:bold;"></div>
+  </div>
+
+  <div id="sessionList" style="margin-top:20px; max-width:500px; margin-left:auto; margin-right:auto;">
+    <h3>Active Sessions</h3>
+    <ul id="sessionLinks"></ul>
+  </div>
+
+  <script>
+    const socket = io();
+
+    // helper: turn spaces into dashes so URL is safe
+    function normalizeName(name) {
+      return name.trim().replace(/\s+/g, '-');
+    }
+
+    // CREATE
+    document.getElementById('createSession').addEventListener('click', () => {
+      let sessionId = document.getElementById('sessionId').value.trim();
+
+      if (!sessionId) {
+        sessionId = prompt('Name your session (e.g. pigeons-night-1):');
+        if (!sessionId) return;
+      }
+
+      sessionId = normalizeName(sessionId);
+      // send to server
+      socket.emit('create', sessionId);
+    });
+
+    // when server confirms create -> redirect
+    socket.on('created', (sessionId) => {
+      const display = document.getElementById('sessionIdDisplay');
+      display.textContent = 'Session created: ' + sessionId;
+      display.style.display = 'block';
+
+      // go to the session page
+      window.location.href = '/session/' + encodeURIComponent(sessionId);
+    });
+
+    // JOIN
+    document.getElementById('joinSession').addEventListener('click', () => {
+      let sessionId = document.getElementById('sessionId').value.trim();
+      if (!sessionId) {
+        alert('Please enter a session name to join.');
+        return;
+      }
+      sessionId = normalizeName(sessionId);
+      window.location.href = '/session/' + encodeURIComponent(sessionId);
+    });
+
+    // show server errors
+    socket.on('error', (msg) => {
+      alert(msg);
+    });
+
+    // fetch & show active sessions
+    function loadSessions() {
+      fetch('/sessions')
+        .then(res => res.json())
+        .then(list => {
+          const ul = document.getElementById('sessionLinks');
+          ul.innerHTML = '';
+          if (!list || list.length === 0) {
+            const li = document.createElement('li');
+            li.textContent = 'No active sessions yet.';
+            ul.appendChild(li);
+            return;
+          }
+          list.forEach(name => {
+            const li = document.createElement('li');
+            const a = document.createElement('a');
+            a.href = '/session/' + encodeURIComponent(name);
+            // make link look nice (replace dashes back to spaces)
+            a.textContent = name.replace(/-/g, ' ');
+            li.appendChild(a);
+            ul.appendChild(li);
+          });
+        })
+        .catch(err => console.error('Error fetching sessions', err));
+    }
+
+    loadSessions();
+    setInterval(loadSessions, 15000);
+  </script>
+</body>
+</html>
