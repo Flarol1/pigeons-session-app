@@ -1,13 +1,36 @@
+// server.js
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
+const sqlite3 = require('sqlite3').verbose();
+
+// --- DB SETUP ---
+const db = new sqlite3.Database('./data.db');
+db.serialize(() => {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  db.run(`
+    CREATE TABLE IF NOT EXISTS user_picks (
+      session_id TEXT,
+      username TEXT,
+      slot TEXT,
+      value TEXT,
+      PRIMARY KEY (session_id, username, slot)
+    )
+  `);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_user_picks_session ON user_picks(session_id)`);
+});
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-// in-memory session store
+// in-memory session runtime state (owner, users, userSongs)
 const sessions = {};
 
 const SONG_SLOTS = [
@@ -20,9 +43,8 @@ const SONG_SLOTS = [
   "Cover",
   "Bustout"
 ];
+
 // ---- PREBUILT TOUR SESSIONS ----
-// id = URL-safe slug used in /session/:id
-// title = nice label shown on the index page
 const PRESET_SESSIONS = [
   { id: "2025-11-11-jackson-ms-duling-hall",        title: "Nov 11, 2025 — Duling Hall (Jackson, MS)" },
   { id: "2025-11-12-houston-tx-the-heights-theater",title: "Nov 12, 2025 — The Heights Theater (Houston, TX)" },
@@ -43,7 +65,7 @@ const PRESET_SESSIONS = [
   { id: "2026-01-23-baltimore-md-soundstage-1",     title: "Jan 23, 2026 — Baltimore Soundstage (Baltimore, MD)" },
   { id: "2026-01-24-baltimore-md-soundstage-2",     title: "Jan 24, 2026 — Baltimore Soundstage (Baltimore, MD)" },
   { id: "2026-02-06-pittsburgh-pa-mr-smalls-1",     title: "Feb 6, 2026 — Mr. Smalls Theatre (Pittsburgh, PA)" },
-  { id: "2026-02-07-pittsburgh-pa-mr-smalls-2",     title: "Feb 7, 2026 — Mr. Smalls Theatre (Pittsburgh, PA)" },
+  { id: "2026-02-07-pittsburgh-pa-mr_smalls-2",     title: "Feb 7, 2026 — Mr. Smalls Theatre (Pittsburgh, PA)" },
   { id: "2026-02-26-burlington-vt-higher-ground",   title: "Feb 26, 2026 — Higher Ground (Burlington, VT)" },
   { id: "2026-02-27-portland-me-state-theatre",     title: "Feb 27, 2026 — State Theatre (Portland, ME)" },
   { id: "2026-02-28-albany-ny-empire-live",         title: "Feb 28, 2026 — Empire Live (Albany, NY)" },
@@ -53,246 +75,209 @@ const PRESET_SESSIONS = [
   { id: "2026-03-07-st-petersburg-fl-jannus",       title: "Mar 7, 2026 — Jannus Live (St. Petersburg, FL)" }
 ];
 
-// Create each preset session at boot (owner/users will fill in as people join)
+// ensure presets exist in DB + memory
 for (const s of PRESET_SESSIONS) {
-  if (!sessions[s.id]) {
-    sessions[s.id] = { owner: null, users: [], userSongs: {} };
-  }
+  db.run(`INSERT OR IGNORE INTO sessions (id) VALUES (?)`, [s.id]);
+  if (!sessions[s.id]) sessions[s.id] = { owner: null, users: [], userSongs: {} };
 }
 
-
-// static (optional public/)
+// --- STATIC + ROUTES ---
 app.use(express.static(path.join(__dirname, 'public')));
 
-// homepage
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-// session page
 app.get('/session/:id', (req, res) => {
   res.sendFile(path.join(__dirname, 'session.html'));
 });
 
-// list sessions with labels for the index page
+// list sessions (for index page)
 app.get('/sessions', (req, res) => {
-  // Prefer PRESET_SESSIONS order/labels, but also include any ad-hoc sessions if you keep that flow
-  const listed = PRESET_SESSIONS.map(s => ({ id: s.id, title: s.title }));
-  res.json(listed);
+  res.json(PRESET_SESSIONS.map(s => ({ id: s.id, title: s.title })));
 });
 
+// health
+app.get('/healthz', (req, res) => res.send('ok'));
 
-// health for Render
-app.get('/healthz', (req, res) => {
-  res.send('ok');
-});
-
+// --- SOCKET.IO ---
 io.on('connection', (socket) => {
   console.log('user connected');
 
-  // optional create from index
+  // optional: create ad-hoc session (kept for compatibility)
   socket.on('create', (sessionId) => {
     const cleanId = decodeURIComponent(sessionId || '').trim();
-    if (!cleanId) {
-      socket.emit('error', 'Invalid session name.');
-      return;
-    }
-    if (!sessions[cleanId]) {
-      sessions[cleanId] = {
-        owner: null,
-        users: [],
-        userSongs: {}
-      };
-      console.log('created session', cleanId);
-    }
+    if (!cleanId) return socket.emit('error', 'Invalid session name.');
+
+    db.run(`INSERT OR IGNORE INTO sessions (id) VALUES (?)`, [cleanId]);
+    if (!sessions[cleanId]) sessions[cleanId] = { owner: null, users: [], userSongs: {} };
+
     socket.join(cleanId);
     socket.emit('created', cleanId);
   });
 
-  // join a session with a name
+  // JOIN
   socket.on('join', ({ sessionId, username }) => {
     const cleanId = decodeURIComponent(sessionId || '').trim();
-    if (!cleanId || !username) {
-      socket.emit('error', 'Invalid session or username');
-      return;
-    }
+    if (!cleanId || !username) return socket.emit('error', 'Invalid session or username');
 
-    // create if missing
-    if (!sessions[cleanId]) {
-      sessions[cleanId] = {
-        owner: null,
-        users: [],
-        userSongs: {}
-      };
-    }
+    // ensure session in DB
+    db.run(`INSERT OR IGNORE INTO sessions (id) VALUES (?)`, [cleanId]);
 
-    const session = sessions[cleanId];
+    // load all picks from DB, rebuild memory snapshot for this emit
+    db.all(
+      `SELECT username, slot, value FROM user_picks WHERE session_id = ?`,
+      [cleanId],
+      (err, rows) => {
+        if (err) {
+          console.error(err);
+          return socket.emit('error', 'Database error');
+        }
 
-    // first person is owner
-    if (!session.owner) {
-      session.owner = username;
-    }
+        // ensure memory container exists
+        if (!sessions[cleanId]) sessions[cleanId] = { owner: null, users: [], userSongs: {} };
+        const session = sessions[cleanId];
 
-    // make sure user has a board
-    if (!session.userSongs[username]) {
-      session.userSongs[username] = {};
-    }
+        // rebuild userSongs from rows
+        session.userSongs = {};
+        const foundNames = new Set();
+        rows.forEach(r => {
+          foundNames.add(r.username);
+          if (!session.userSongs[r.username]) session.userSongs[r.username] = {};
+          session.userSongs[r.username][r.slot] = r.value;
+        });
 
-    // update or add user entry
-    const existingUser = session.users.find(u => u.username === username);
-    if (existingUser) {
-      existingUser.socketId = socket.id;
-    } else {
-      session.users.push({ socketId: socket.id, username });
-    }
+        // rebuild users (keep socketId for this user)
+        session.users = Array.from(foundNames).map(name => ({ username: name, socketId: null }));
 
-    socket.join(cleanId);
-    socket.emit('joined', cleanId);
-    io.to(cleanId).emit('update-session', session);
+        // add THIS user to users array (with this socket)
+        const existing = session.users.find(u => u.username === username);
+        if (existing) {
+          existing.socketId = socket.id;
+        } else {
+          session.users.push({ username, socketId: socket.id });
+        }
+
+        // ensure this user's board exists
+        if (!session.userSongs[username]) session.userSongs[username] = {};
+
+        // first to join becomes owner (owner not persisted in DB; OK)
+        if (!session.owner) session.owner = username;
+
+        socket.join(cleanId);
+        socket.emit('joined', cleanId);
+        io.to(cleanId).emit('update-session', session);
+      }
+    );
   });
 
-  // user sets their own slot
+  // SET SONG (upsert)
   socket.on('set-song', ({ sessionId, slot, value, username }) => {
     const cleanId = decodeURIComponent(sessionId || '').trim();
     const session = sessions[cleanId];
     if (!session) return;
-// bulk set songs for one user
-socket.on('set-many-songs', ({ sessionId, username, songs }) => {
-  const cleanId = decodeURIComponent(sessionId || '').trim();
-  const session = sessions[cleanId];
-  if (!session) return;
 
-  // who is calling?
-  const caller = session.users.find(u => u.socketId === socket.id);
-  if (!caller) {
-    socket.emit('error', 'Not in session.');
-    return;
-  }
-
-  // only let users save their OWN board
-  if (caller.username !== username) {
-    socket.emit('error', 'You can only save your own songs.');
-    return;
-  }
-
-  // make sure their board exists
-  if (!session.userSongs[username]) {
-    session.userSongs[username] = {};
-  }
-
-  // songs is an object: { "Opener": "Avalanche", "Song 2": "Horizon", ... }
-  for (const [slot, value] of Object.entries(songs)) {
-    // ignore unknown slots
-    if (!SONG_SLOTS.includes(slot)) continue;
-
-    if (value && value.trim() !== '') {
-      session.userSongs[username][slot] = value.trim();
-    } else {
-      // if they cleared it, remove it
-      delete session.userSongs[username][slot];
-    }
-  }
-
-  // send updated session to everyone in the room
-  io.to(cleanId).emit('update-session', session);
-});
-
-
-    // find caller
     const caller = session.users.find(u => u.socketId === socket.id);
-    if (!caller) {
-      socket.emit('error', 'Not in session.');
-      return;
-    }
-    // only edit your own board
-    if (caller.username !== username) {
-      socket.emit('error', 'You can only edit your own board.');
-      return;
-    }
-    if (!SONG_SLOTS.includes(slot)) {
-      socket.emit('error', 'Invalid slot.');
-      return;
-    }
+    if (!caller) return socket.emit('error', 'Not in session.');
+    if (caller.username !== username) return socket.emit('error', 'You can only edit your own board.');
+    if (!SONG_SLOTS.includes(slot)) return socket.emit('error', 'Invalid slot.');
 
-    if (!session.userSongs[username]) {
-      session.userSongs[username] = {};
-    }
-    session.userSongs[username][slot] = value;
+    // DB upsert
+    db.run(
+      `INSERT INTO user_picks (session_id, username, slot, value)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(session_id, username, slot)
+       DO UPDATE SET value = excluded.value`,
+      [cleanId, username, slot, value],
+      (err) => {
+        if (err) {
+          console.error(err);
+          return socket.emit('error', 'Database error');
+        }
 
-    io.to(cleanId).emit('update-session', session);
+        // memory update
+        if (!session.userSongs[username]) session.userSongs[username] = {};
+        session.userSongs[username][slot] = value;
+
+        io.to(cleanId).emit('update-session', session);
+      }
+    );
   });
 
-  // delete a single slot value (owner OR board owner)
+  // DELETE one slot value (owner OR board owner)
   socket.on('delete-song', ({ sessionId, slot, username }) => {
     const cleanId = decodeURIComponent(sessionId || '').trim();
     const session = sessions[cleanId];
     if (!session) return;
 
     const caller = session.users.find(u => u.socketId === socket.id);
-    if (!caller) {
-      socket.emit('error', 'Not in session.');
-      return;
-    }
+    if (!caller) return socket.emit('error', 'Not in session.');
 
-    const isSessionOwner = caller.username === session.owner;
+    const isOwner = caller.username === session.owner;
     const isBoardOwner = caller.username === username;
+    if (!isOwner && !isBoardOwner) return socket.emit('error', 'You can only delete your own entry.');
 
-    if (!isSessionOwner && !isBoardOwner) {
-      socket.emit('error', 'You can only delete your own entry.');
-      return;
-    }
-
-    if (session.userSongs[username] && session.userSongs[username][slot]) {
-      delete session.userSongs[username][slot];
-    }
-
-    io.to(cleanId).emit('update-session', session);
+    db.run(
+      `DELETE FROM user_picks WHERE session_id = ? AND username = ? AND slot = ?`,
+      [cleanId, username, slot],
+      (err) => {
+        if (err) {
+          console.error(err);
+          return socket.emit('error', 'Database error');
+        }
+        if (session.userSongs[username]) delete session.userSongs[username][slot];
+        io.to(cleanId).emit('update-session', session);
+      }
+    );
   });
 
-  // OWNER-ONLY: delete a whole user's board
+  // OWNER-ONLY: delete an entire user's board
   socket.on('delete-user-board', ({ sessionId, targetUsername }) => {
     const cleanId = decodeURIComponent(sessionId || '').trim();
     const session = sessions[cleanId];
     if (!session) return;
 
     const caller = session.users.find(u => u.socketId === socket.id);
-    if (!caller) {
-      socket.emit('error', 'Not in session.');
-      return;
-    }
+    if (!caller) return socket.emit('error', 'Not in session.');
+    if (caller.username !== session.owner) return socket.emit('error', 'Only the session owner can delete a user board.');
 
-    const isOwner = caller.username === session.owner;
-    if (!isOwner) {
-      socket.emit('error', 'Only the session owner can delete a user board.');
-      return;
-    }
-
-    // remove their songs
-    if (session.userSongs[targetUsername]) {
-      delete session.userSongs[targetUsername];
-    }
-
-    // remove from users list
-    session.users = session.users.filter(u => u.username !== targetUsername);
-
-    io.to(cleanId).emit('update-session', session);
+    db.run(
+      `DELETE FROM user_picks WHERE session_id = ? AND username = ?`,
+      [cleanId, targetUsername],
+      (err) => {
+        if (err) {
+          console.error(err);
+          return socket.emit('error', 'Database error');
+        }
+        delete session.userSongs[targetUsername];
+        session.users = session.users.filter(u => u.username !== targetUsername);
+        io.to(cleanId).emit('update-session', session);
+      }
+    );
   });
 
-  // clear all boards
+  // CLEAR ALL boards in session
   socket.on('clear-all', ({ sessionId }) => {
     const cleanId = decodeURIComponent(sessionId || '').trim();
     const session = sessions[cleanId];
     if (!session) return;
 
-    Object.keys(session.userSongs).forEach(user => {
-      session.userSongs[user] = {};
-    });
-
-    io.to(cleanId).emit('update-session', session);
+    db.run(
+      `DELETE FROM user_picks WHERE session_id = ?`,
+      [cleanId],
+      (err) => {
+        if (err) {
+          console.error(err);
+          return socket.emit('error', 'Database error');
+        }
+        Object.keys(session.userSongs).forEach(user => (session.userSongs[user] = {}));
+        io.to(cleanId).emit('update-session', session);
+      }
+    );
   });
 
-  // don't remove users on disconnect so boards stay visible
   socket.on('disconnect', () => {
+    // keep boards; leave users present so boards remain visible
     console.log('user disconnected');
   });
 });

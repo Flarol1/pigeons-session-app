@@ -6,7 +6,21 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "express": "^4.19.0",
-    "socket.io": "^4.7.5"
-  }
+    "express": "^4.21.2",
+    "socket.io": "^4.7.5",
+    "sqlite3": "^5.1.7"
+  },
+  "description": "",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Flarol1/pigeons-session-app.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Flarol1/pigeons-session-app/issues"
+  },
+  "homepage": "https://github.com/Flarol1/pigeons-session-app#readme"
 }
