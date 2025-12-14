@@ -220,15 +220,10 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-// Track which username belongs to which socket so the server
-// never trusts a client-sent username for writes.
-const socketMap = new Map(); // socket.id -> { sessionId, username }
-
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 app.get('/session/:id', (req, res) => res.sendFile(path.join(__dirname, 'session.html')));
 
-// list presets
 app.get('/sessions', (req, res) => {
   res.json(PRESET_SESSIONS.map(s => ({ id: s.id, title: s.title })));
 });
@@ -245,22 +240,28 @@ app.get('/dbcheck', async (req, res) => {
   }
 });
 
+// ✅ SINGLE connection block
 io.on('connection', (socket) => {
+  const readyOrDie = () => {
+    if (!DB_DISABLED && !dbReady) {
+      socket.emit('error', 'Database not ready yet. Try again in a moment.');
+      return false;
+    }
+    return true;
+  };
+
   // JOIN
   socket.on('join', async ({ sessionId, username }) => {
+    if (!readyOrDie()) return;
+    const cleanId = decodeURIComponent(sessionId || '').trim();
+    if (!cleanId || !username) {
+      socket.emit('error', 'Invalid session or username');
+      return;
+    }
     try {
-      const cleanId = decodeURIComponent(sessionId || '').trim();
-      const cleanUser = String(username || '').trim();
-      if (!cleanId || !cleanUser) {
-        socket.emit('error', 'Invalid session or username');
-        return;
-      }
-
-      await api.ensureSession(cleanId);
-      await api.ensureUser(cleanId, cleanUser);
-
+      await api.ensureSession(cleanId, username);   // <-- await!
+      await api.ensureUser(cleanId, username);      // <-- await!
       socket.join(cleanId);
-      socketMap.set(socket.id, { sessionId: cleanId, username: cleanUser });
       socket.emit('joined', cleanId);
 
       const state = await api.buildState(cleanId);
@@ -271,60 +272,68 @@ io.on('connection', (socket) => {
     }
   });
 
-  // SET a slot (only your own board)
-  socket.on('set-song', async ({ slot, value }) => {
+  // SET SONG
+  socket.on('set-song', async ({ sessionId, slot, value, username }) => {
+    if (!readyOrDie()) return;
+    const cleanId = decodeURIComponent(sessionId || '').trim();
+    if (!SONG_SLOTS.includes(slot)) return;
     try {
-      const info = socketMap.get(socket.id);
-      if (!info) return socket.emit('error', 'Not joined.');
-      const { sessionId, username } = info;
-
-      if (!SONG_SLOTS.includes(slot)) return;
-      await api.upsertPick(sessionId, username, slot, value);
-
-      const state = await api.buildState(sessionId);
-      io.to(sessionId).emit('update-session', state);
+      await api.upsertPick(cleanId, username, slot, value);
+      const state = await api.buildState(cleanId);
+      io.to(cleanId).emit('update-session', state);
     } catch (err) {
       console.error('[SET-SONG ERROR]', err);
       socket.emit('error', 'Save failed: ' + err.message);
     }
   });
 
-  // DELETE a single slot (only your own board)
-  socket.on('delete-song', async ({ slot }) => {
+  // DELETE one slot
+  socket.on('delete-song', async ({ sessionId, slot, username }) => {
+    if (!readyOrDie()) return;
+    const cleanId = decodeURIComponent(sessionId || '').trim();
     try {
-      const info = socketMap.get(socket.id);
-      if (!info) return socket.emit('error', 'Not joined.');
-      const { sessionId, username } = info;
-
-      await api.deletePick(sessionId, username, slot);
-      const state = await api.buildState(sessionId);
-      io.to(sessionId).emit('update-session', state);
+      await api.deletePick(cleanId, username, slot);
+      const state = await api.buildState(cleanId);
+      io.to(cleanId).emit('update-session', state);
     } catch (err) {
       console.error('[DELETE-SONG ERROR]', err);
       socket.emit('error', 'Delete failed: ' + err.message);
     }
   });
 
-  // CLEAR *my* board
-  socket.on('clear-my-board', async () => {
+  // ✅ CLEAR ALL (works again)
+  socket.on('clear-all', async ({ sessionId }) => {
+    if (!readyOrDie()) return;
+    const cleanId = decodeURIComponent(sessionId || '').trim();
     try {
-      const info = socketMap.get(socket.id);
-      if (!info) return socket.emit('error', 'Not joined.');
-      const { sessionId, username } = info;
-
-      await api.clearBoard(sessionId, username);
-      const state = await api.buildState(sessionId);
-      io.to(sessionId).emit('update-session', state);
+      await api.clearAll(cleanId);
+      const state = await api.buildState(cleanId);
+      io.to(cleanId).emit('update-session', state);
     } catch (err) {
-      console.error('[CLEAR-MINE ERROR]', err);
+      console.error('[CLEAR-ALL ERROR]', err);
       socket.emit('error', 'Clear failed: ' + err.message);
     }
   });
 
+  // DELETE a user's entire board (only if you still expose it in the UI)
+  socket.on('delete-user-board', async ({ sessionId, targetUsername }) => {
+    if (!readyOrDie()) return;
+    const cleanId = decodeURIComponent(sessionId || '').trim();
+    try {
+      await api.deleteBoard(cleanId, targetUsername);
+      const state = await api.buildState(cleanId);
+      io.to(cleanId).emit('update-session', state);
+    } catch (err) {
+      console.error('[DELETE-BOARD ERROR]', err);
+      socket.emit('error', 'Delete board failed: ' + err.message);
+    }
+  });
+});
+
   socket.on('disconnect', () => {
     socketMap.delete(socket.id);
   });
-});
+
 
 // ---- boot ------------------------------------------------------------------
 const PORT = process.env.PORT || 8080;
