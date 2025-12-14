@@ -7,14 +7,13 @@ const path = require('path');
 // ---- DB mode detection -----------------------------------------------------
 const DB_DISABLED =
   String(process.env.DISABLE_DB || '').trim() === '1' ||
-  (
-    // if these aren't set AND no Cloud SQL instance is specified, assume no DB
-    !process.env.PGUSER || !process.env.PGPASSWORD || !process.env.PGDATABASE
-  ) && !process.env.INSTANCE_CONNECTION_NAME;
+  ((!process.env.PGUSER || !process.env.PGPASSWORD || !process.env.PGDATABASE) &&
+   !process.env.INSTANCE_CONNECTION_NAME);
 
 let useSocket = false;
 let useSsl = false;
 let pool = null;
+let hostForLog = 'in-memory';
 
 if (!DB_DISABLED) {
   const { Pool } = require('pg');
@@ -22,11 +21,13 @@ if (!DB_DISABLED) {
   const defaultHost = INSTANCE_CONNECTION_NAME
     ? `/cloudsql/${INSTANCE_CONNECTION_NAME}`
     : process.env.PGHOST || 'localhost';
+
   useSocket = String(defaultHost || '').startsWith('/cloudsql');
   useSsl = !useSocket && String(process.env.PGSSL || '').toLowerCase() === 'true';
+  hostForLog = process.env.PGHOST || defaultHost;
 
   pool = new Pool({
-    host: process.env.PGHOST || defaultHost,
+    host: hostForLog,
     user: process.env.PGUSER,
     password: process.env.PGPASSWORD,
     database: process.env.PGDATABASE,
@@ -42,7 +43,7 @@ console.log('[BOOT]',
   DB_DISABLED
     ? 'DB DISABLED → using in-memory storage'
     : JSON.stringify({
-        host: process.env.PGHOST || (process.env.INSTANCE_CONNECTION_NAME ? `/cloudsql/${process.env.INSTANCE_CONNECTION_NAME}` : 'localhost'),
+        host: hostForLog,
         db: process.env.PGDATABASE,
         user: process.env.PGUSER,
         usingSocket: useSocket,
@@ -52,7 +53,7 @@ console.log('[BOOT]',
 
 // ---- Schema (PG only) ------------------------------------------------------
 async function initSchema() {
-  if (DB_DISABLED) return;
+  if (DB_DISABLED) return; // resolves immediately (dbReady will become true)
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS sessions (
@@ -86,16 +87,15 @@ const SONG_SLOTS = ['Opener','Song 2','Song 3','Song 4','Song 5','Encore','Cover
 
 const PRESET_SESSIONS = [
   { id: "2025-12-19-port-chester-ny-capitol-1", title: "Dec 19, 2025 — The Capitol Theatre (Port Chester, NY)" },
-  { id: "2025-12-20-port_chester-ny-capitol-2", title: "Dec 20, 2025 — The Capitol Theatre (Port Chester, NY)" },
+  { id: "2025-12-20-port-chester-ny-capitol-2", title: "Dec 20, 2025 — The Capitol Theatre (Port Chester, NY)" }, // hyphen
   { id: "2025-12-30-denver-co-ogden-1",         title: "Dec 30, 2025 — Ogden Theatre (Denver, CO)" },
   { id: "2025-12-31-denver-co-ogden-2",         title: "Dec 31, 2025 — Ogden Theatre (Denver, CO)" },
 ];
 
-// Memory structs (only used when DB_DISABLED)
+// In-memory store (only used when DB_DISABLED)
 const mem = {
   sessions: new Map(), // id -> { owner, users:Set, picks: Map(key, value) }, key = `${username}|${slot}`
 };
-
 function memEnsureSession(id, ownerMaybe) {
   if (!mem.sessions.has(id)) {
     mem.sessions.set(id, { owner: ownerMaybe || null, users: new Set(), picks: new Map() });
@@ -213,21 +213,21 @@ async function pgBuildState(sessionId) {
 
 // choose backend
 const api = DB_DISABLED ? {
-  ensureSession: memEnsureSession,
-  ensureUser: memEnsureUser,
-  upsertPick: memUpsertPick,
-  deletePick: memDeletePick,
-  deleteBoard: memDeleteBoard,
-  clearAll: memClearAll,
-  buildState: memBuildState,
+  ensureSession: async (...a) => memEnsureSession(...a),
+  ensureUser:    async (...a) => memEnsureUser(...a),
+  upsertPick:    async (...a) => memUpsertPick(...a),
+  deletePick:    async (...a) => memDeletePick(...a),
+  deleteBoard:   async (...a) => memDeleteBoard(...a),
+  clearAll:      async (...a) => memClearAll(...a),
+  buildState:    async (...a) => memBuildState(...a),
 } : {
   ensureSession: pgEnsureSession,
-  ensureUser: pgEnsureUser,
-  upsertPick: pgUpsertPick,
-  deletePick: pgDeletePick,
-  deleteBoard: pgDeleteBoard,
-  clearAll: pgClearAll,
-  buildState: pgBuildState,
+  ensureUser:    pgEnsureUser,
+  upsertPick:    pgUpsertPick,
+  deletePick:    pgDeletePick,
+  deleteBoard:   pgDeleteBoard,
+  clearAll:      pgClearAll,
+  buildState:    pgBuildState,
 };
 
 // ---- App / sockets ---------------------------------------------------------
@@ -255,16 +255,24 @@ app.get('/dbcheck', async (req, res) => {
   }
 });
 
+let dbReady = DB_DISABLED; // in-memory is instantly ready
+
 io.on('connection', (socket) => {
+  // JOIN
   socket.on('join', async ({ sessionId, username }) => {
     const cleanId = decodeURIComponent(sessionId || '').trim();
     if (!cleanId || !username) {
       socket.emit('error', 'Invalid session or username');
       return;
     }
+    if (!DB_DISABLED && !dbReady) {
+      socket.emit('error', 'Database not ready yet. Try again in a moment.');
+      return;
+    }
     try {
-      api.ensureSession(cleanId, username);
-      api.ensureUser(cleanId, username);
+      await api.ensureSession(cleanId, username); // <-- await
+      await api.ensureUser(cleanId, username);    // <-- await
+
       socket.join(cleanId);
       socket.emit('joined', cleanId);
 
@@ -276,6 +284,7 @@ io.on('connection', (socket) => {
     }
   });
 
+  // SET SONG (upsert)
   socket.on('set-song', async ({ sessionId, slot, value, username }) => {
     const cleanId = decodeURIComponent(sessionId || '').trim();
     if (!SONG_SLOTS.includes(slot)) return;
@@ -289,33 +298,39 @@ io.on('connection', (socket) => {
     }
   });
 
+  // DELETE one slot
   socket.on('delete-song', async ({ sessionId, slot, username }) => {
+    const cleanId = decodeURIComponent(sessionId || '').trim();
     try {
-      await api.deletePick(decodeURIComponent(sessionId || '').trim(), username, slot);
-      const state = await api.buildState(decodeURIComponent(sessionId || '').trim());
-      io.to(decodeURIComponent(sessionId || '').trim()).emit('update-session', state);
+      await api.deletePick(cleanId, username, slot);
+      const state = await api.buildState(cleanId);
+      io.to(cleanId).emit('update-session', state);
     } catch (err) {
       console.error('[DELETE-SONG ERROR]', err);
       socket.emit('error', 'Delete failed: ' + err.message);
     }
   });
 
+  // OWNER: DELETE a user's entire board
   socket.on('delete-user-board', async ({ sessionId, targetUsername }) => {
+    const cleanId = decodeURIComponent(sessionId || '').trim();
     try {
-      await api.deleteBoard(decodeURIComponent(sessionId || '').trim(), targetUsername);
-      const state = await api.buildState(decodeURIComponent(sessionId || '').trim());
-      io.to(decodeURIComponent(sessionId || '').trim()).emit('update-session', state);
+      await api.deleteBoard(cleanId, targetUsername);
+      const state = await api.buildState(cleanId);
+      io.to(cleanId).emit('update-session', state);
     } catch (err) {
       console.error('[DELETE-BOARD ERROR]', err);
       socket.emit('error', 'Delete board failed: ' + err.message);
     }
   });
 
+  // CLEAR ALL picks (keep users)
   socket.on('clear-all', async ({ sessionId }) => {
+    const cleanId = decodeURIComponent(sessionId || '').trim();
     try {
-      await api.clearAll(decodeURIComponent(sessionId || '').trim());
-      const state = await api.buildState(decodeURIComponent(sessionId || '').trim());
-      io.to(decodeURIComponent(sessionId || '').trim()).emit('update-session', state);
+      await api.clearAll(cleanId);
+      const state = await api.buildState(cleanId);
+      io.to(cleanId).emit('update-session', state);
     } catch (err) {
       console.error('[CLEAR-ALL ERROR]', err);
       socket.emit('error', 'Clear failed: ' + err.message);
@@ -328,28 +343,15 @@ const PORT = process.env.PORT || 8080; // Cloud Run expects 8080
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
-  console.log(`[DB CONFIG] host=${process.env.PGHOST || defaultHost} usingSocket=${useSocket} ssl=${useSsl}`);
+  console.log(`[DB CONFIG] host=${hostForLog} usingSocket=${useSocket} ssl=${useSsl}`);
 });
 
-// Try to init DB in the background so the container can pass the port check
-let dbReady = false;
+// init DB in the background so the container can pass the port check fast
 initSchema()
   .then(() => {
     dbReady = true;
     console.log('DB schema ready');
   })
   .catch((e) => {
-    console.error('DB init failed (will keep serving):', e.message);
+    console.error('DB init failed (serving continues):', e.message);
   });
-
-// Optional: short-circuit noisy socket calls while DB is down
-io.on('connection', (socket) => {
-  socket.on('join', async (payload) => {
-    if (!dbReady) {
-      socket.emit('error', 'Database not ready yet. Try again in a moment.');
-      return;
-    }
-    // ... your existing join handler ...
-  });
-  // leave the rest of your handlers as-is
-});
