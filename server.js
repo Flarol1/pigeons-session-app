@@ -47,17 +47,7 @@ const PRESET_SESSIONS = [
   { id: "2025-12-20-port-chester-ny-capitol-2",     title: "Dec 20, 2025 — The Capitol Theatre (Port Chester, NY)" },
   { id: "2025-12-30-denver-co-ogden-1",             title: "Dec 30, 2025 — Ogden Theatre (Denver, CO)" },
   { id: "2025-12-31-denver-co-ogden-2",             title: "Dec 31, 2025 — Ogden Theatre (Denver, CO)" },
-  { id: "2026-01-23-baltimore-md-soundstage-1",     title: "Jan 23, 2026 — Baltimore Soundstage (Baltimore, MD)" },
-  { id: "2026-01-24-baltimore-md-soundstage-2",     title: "Jan 24, 2026 — Baltimore Soundstage (Baltimore, MD)" },
-  { id: "2026-02-06-pittsburgh-pa-mr-smalls-1",     title: "Feb 6, 2026 — Mr. Smalls Theatre (Pittsburgh, PA)" },
-  { id: "2026-02-07-pittsburgh-pa-mr-smalls-2",     title: "Feb 7, 2026 — Mr. Smalls Theatre (Pittsburgh, PA)" },
-  { id: "2026-02-26-burlington-vt-higher-ground",   title: "Feb 26, 2026 — Higher Ground (Burlington, VT)" },
-  { id: "2026-02-27-portland-me-state-theatre",     title: "Feb 27, 2026 — State Theatre (Portland, ME)" },
-  { id: "2026-02-28-albany-ny-empire-live",         title: "Feb 28, 2026 — Empire Live (Albany, NY)" },
-  { id: "2026-03-04-savannah-ga-victory-north",     title: "Mar 4, 2026 — Victory North (Savannah, GA)" },
-  { id: "2026-03-05-jacksonville-fl-intuition",     title: "Mar 5, 2026 — Intuition Ale Works (Jacksonville, FL)" },
-  { id: "2026-03-06-sanford-fl-tuffys",             title: "Mar 6, 2026 — Tuffy’s Outdoor Stage (Sanford, FL)" },
-  { id: "2026-03-07-st-petersburg-fl-jannus",       title: "Mar 7, 2026 — Jannus Live (St. Petersburg, FL)" }
+
 ];
 
 // ensure a session exists; set owner only if currently null
