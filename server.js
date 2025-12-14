@@ -138,6 +138,17 @@ const io = new Server(server);
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 app.get('/session/:id', (req, res) => res.sendFile(path.join(__dirname, 'session.html')));
+// add near your other app.get(...) routes in server.js
+app.get('/dbcheck', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT 1 AS ok, NOW() AS ts');
+    res.type('text').send(`DB OK: ${r.rows[0].ok} @ ${r.rows[0].ts.toISOString?.() || r.rows[0].ts}`);
+  } catch (e) {
+    console.error('DBCHECK ERROR:', e);
+    res.status(500).type('text').send(`DB ERROR: ${e.message}`);
+  }
+});
+
 
 // index list
 app.get('/sessions', (req, res) => {
