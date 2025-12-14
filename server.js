@@ -6,21 +6,28 @@ const path = require('path');
 const { Pool } = require('pg');
 
 /**
- * ENV VARS you must set (Cloud Run -> Edit & Deploy -> Variables & Secrets):
- *   PGDATABASE      e.g. "pppp"
- *   PGUSER          e.g. "appuser"
- *   PGPASSWORD      your password
- *   INSTANCE_CONNECTION_NAME  e.g. "pppp-477902:us-east1:ppppbook"
+ * REQUIRED ENV (set these in Cloud Run → Edit & Deploy → Variables & Secrets)
+ *   INSTANCE_CONNECTION_NAME  e.g. "pppp-477902:us-east1:ppppbook"  (Cloud Run)
+ *   PGUSER                    e.g. "appuser"
+ *   PGPASSWORD                your password
+ *   PGDATABASE                e.g. "pppp"
+ *   PGPORT                    (optional, defaults to 5432)
  *
- * For Cloud Run (recommended):
- *   PGHOST is the Unix socket path: `/cloudsql/${INSTANCE_CONNECTION_NAME}`
- *   PGPORT defaults to 5432
- *
- * For local dev: set PGHOST=localhost and run a local Postgres, or use a connection string.
+ * How connection is chosen:
+ * - If INSTANCE_CONNECTION_NAME is set, we use the Unix socket at /cloudsql/<instance>
+ *   (this is the recommended way on Cloud Run and does NOT use SSL).
+ * - Otherwise we fall back to PGHOST (or 'localhost'), which can be used for local dev
+ *   or a public IP Postgres. If you go over public internet and your server needs SSL,
+ *   set PGSSL=true.
  */
 
 const INSTANCE_CONNECTION_NAME = process.env.INSTANCE_CONNECTION_NAME || '';
-const defaultHost = INSTANCE_CONNECTION_NAME ? `/cloudsql/${INSTANCE_CONNECTION_NAME}` : process.env.PGHOST || 'localhost';
+const defaultHost = INSTANCE_CONNECTION_NAME
+  ? `/cloudsql/${INSTANCE_CONNECTION_NAME}` // Cloud Run unix socket
+  : process.env.PGHOST || 'localhost';
+
+const useSocket = String(defaultHost || '').startsWith('/cloudsql');
+const useSsl = !useSocket && String(process.env.PGSSL || '').toLowerCase() === 'true';
 
 const pool = new Pool({
   host: process.env.PGHOST || defaultHost,
@@ -28,8 +35,7 @@ const pool = new Pool({
   password: process.env.PGPASSWORD,
   database: process.env.PGDATABASE,
   port: process.env.PGPORT ? Number(process.env.PGPORT) : 5432,
-  // For socket connections (Cloud Run) do NOT set ssl
-  // For public IP connections you may need: ssl: { rejectUnauthorized: false }
+  ssl: useSsl ? { rejectUnauthorized: false } : false,
 });
 
 // --- schema (run once on boot) ---------------------------------------------
@@ -70,14 +76,16 @@ const PRESET_SESSIONS = [
   { id: "2025-12-19-port-chester-ny-capitol-1", title: "Dec 19, 2025 — The Capitol Theatre (Port Chester, NY)" },
   { id: "2025-12-20-port-chester-ny-capitol-2", title: "Dec 20, 2025 — The Capitol Theatre (Port Chester, NY)" },
   { id: "2025-12-30-denver-co-ogden-1",         title: "Dec 30, 2025 — Ogden Theatre (Denver, CO)" },
-  { id: "2025-12-31-denver-co-ogden-2",         title: "Dec 31, 2025 — Ogden Theatre (Denver, CO)" },
+  { id: "2025-12-31",         title: "Dec 31, 2025 — Ogden Theatre (Denver, CO)" },
 ];
 
 async function ensureSession(sessionId, maybeOwner) {
-  // create if not exists
-  await pool.query(`INSERT INTO sessions (id) VALUES ($1) ON CONFLICT (id) DO NOTHING;`, [sessionId]);
+  await pool.query(
+    `INSERT INTO sessions (id) VALUES ($1)
+     ON CONFLICT (id) DO NOTHING;`,
+    [sessionId]
+  );
   if (maybeOwner) {
-    // set owner if null
     await pool.query(
       `UPDATE sessions SET owner = COALESCE(owner, $1) WHERE id = $2;`,
       [maybeOwner, sessionId]
@@ -100,8 +108,12 @@ async function buildSessionState(sessionId) {
   const s = await pool.query(`SELECT owner FROM sessions WHERE id = $1;`, [sessionId]);
   session.owner = s.rows[0]?.owner || null;
 
+  // Keep this collate stable; "C" puts capitals before lowercase; for true case-insensitive,
+  // consider lower(username) ORDER BY lower(username).
   const u = await pool.query(
-    `SELECT username FROM session_users WHERE session_id = $1 ORDER BY username COLLATE "C";`,
+    `SELECT username FROM session_users
+      WHERE session_id = $1
+      ORDER BY username COLLATE "C";`,
     [sessionId]
   );
   session.users = u.rows.map(r => ({ socketId: null, username: r.username }));
@@ -134,6 +146,17 @@ app.get('/sessions', (req, res) => {
 
 app.get('/healthz', (req, res) => res.send('ok'));
 
+// quick DB probe for debugging Cloud Run connection/env
+app.get('/dbcheck', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT 1 AS ok, NOW() AS now');
+    res.status(200).send(`DB OK: ${r.rows[0].ok} @ ${r.rows[0].now.toISOString()}`);
+  } catch (e) {
+    console.error('[DBCHECK ERROR]', e);
+    res.status(500).send('DB FAIL: ' + e.message);
+  }
+});
+
 io.on('connection', (socket) => {
   // JOIN
   socket.on('join', async ({ sessionId, username }) => {
@@ -143,6 +166,7 @@ io.on('connection', (socket) => {
       return;
     }
     try {
+      console.log('[JOIN] sessionId=%s username=%s', cleanId, username);
       await ensureSession(cleanId, username);   // first joiner becomes owner
       await ensureUser(cleanId, username);
 
@@ -152,8 +176,8 @@ io.on('connection', (socket) => {
       const state = await buildSessionState(cleanId);
       io.to(cleanId).emit('update-session', state);
     } catch (err) {
-      console.error('join error', err);
-      socket.emit('error', 'Join failed.');
+      console.error('[JOIN ERROR]', err);
+      socket.emit('error', 'Join failed: ' + err.message);
     }
   });
 
@@ -177,8 +201,8 @@ io.on('connection', (socket) => {
       const state = await buildSessionState(cleanId);
       io.to(cleanId).emit('update-session', state);
     } catch (err) {
-      console.error('set-song error', err);
-      socket.emit('error', 'Save failed.');
+      console.error('[SET-SONG ERROR]', err);
+      socket.emit('error', 'Save failed: ' + err.message);
     }
   });
 
@@ -193,12 +217,12 @@ io.on('connection', (socket) => {
       const state = await buildSessionState(cleanId);
       io.to(cleanId).emit('update-session', state);
     } catch (err) {
-      console.error('delete-song error', err);
-      socket.emit('error', 'Delete failed.');
+      console.error('[DELETE-SONG ERROR]', err);
+      socket.emit('error', 'Delete failed: ' + err.message);
     }
   });
 
-  // OWNER: DELETE a user's whole board
+  // OWNER: DELETE a user's entire board
   socket.on('delete-user-board', async ({ sessionId, targetUsername }) => {
     const cleanId = decodeURIComponent(sessionId || '').trim();
     try {
@@ -213,8 +237,8 @@ io.on('connection', (socket) => {
       const state = await buildSessionState(cleanId);
       io.to(cleanId).emit('update-session', state);
     } catch (err) {
-      console.error('delete-user-board error', err);
-      socket.emit('error', 'Delete board failed.');
+      console.error('[DELETE-BOARD ERROR]', err);
+      socket.emit('error', 'Delete board failed: ' + err.message);
     }
   });
 
@@ -226,12 +250,12 @@ io.on('connection', (socket) => {
       const state = await buildSessionState(cleanId);
       io.to(cleanId).emit('update-session', state);
     } catch (err) {
-      console.error('clear-all error', err);
-      socket.emit('error', 'Clear failed.');
+      console.error('[CLEAR-ALL ERROR]', err);
+      socket.emit('error', 'Clear failed: ' + err.message);
     }
   });
 
-  socket.on('disconnect', () => { /* no-op */ });
+  socket.on('disconnect', () => { /* keep data in DB; nothing to do */ });
 });
 
 // --- boot -------------------------------------------------------------------
@@ -241,6 +265,8 @@ io.on('connection', (socket) => {
     const PORT = process.env.PORT || 8080; // Cloud Run expects 8080
     server.listen(PORT, '0.0.0.0', () => {
       console.log(`Server running on port ${PORT}`);
+      console.log(`Socket mode: ${useSocket ? 'Unix socket /cloudsql' : 'TCP host ' + (process.env.PGHOST || defaultHost)}`);
+      console.log(`SSL: ${useSsl ? 'enabled' : 'disabled'}`);
     });
   } catch (e) {
     console.error('Failed to init schema:', e);
