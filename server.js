@@ -6,19 +6,17 @@ const path = require('path');
 const { Pool } = require('pg');
 
 /**
- * REQUIRED ENV (set these in Cloud Run → Edit & Deploy → Variables & Secrets)
- *   INSTANCE_CONNECTION_NAME  e.g. "pppp-477902:us-east1:ppppbook"  (Cloud Run)
+ * REQUIRED ENV (Cloud Run → Edit & Deploy → Variables & Secrets)
+ *   INSTANCE_CONNECTION_NAME  e.g. "pppp-477902:us-east1:ppppbook"  (Cloud Run sockets)
  *   PGUSER                    e.g. "appuser"
- *   PGPASSWORD                your password
+ *   PGPASSWORD                your real password (put here as an ENV VAR, not in code)
  *   PGDATABASE                e.g. "pppp"
- *   PGPORT                    (optional, defaults to 5432)
+ *   PGPORT                    optional (defaults 5432)
  *
- * How connection is chosen:
- * - If INSTANCE_CONNECTION_NAME is set, we use the Unix socket at /cloudsql/<instance>
- *   (this is the recommended way on Cloud Run and does NOT use SSL).
- * - Otherwise we fall back to PGHOST (or 'localhost'), which can be used for local dev
- *   or a public IP Postgres. If you go over public internet and your server needs SSL,
- *   set PGSSL=true.
+ * Connection logic:
+ * - If INSTANCE_CONNECTION_NAME is set → use Unix socket "/cloudsql/<instance>" (no SSL).
+ * - Else fall back to PGHOST (or "localhost") for local/dev TCP. If your remote DB needs SSL,
+ *   set PGSSL=true to enable "ssl: { rejectUnauthorized: false }".
  */
 
 const INSTANCE_CONNECTION_NAME = process.env.INSTANCE_CONNECTION_NAME || '';
@@ -36,7 +34,23 @@ const pool = new Pool({
   database: process.env.PGDATABASE,
   port: process.env.PGPORT ? Number(process.env.PGPORT) : 5432,
   ssl: useSsl ? { rejectUnauthorized: false } : false,
+  connectionTimeoutMillis: 8000,
+  idleTimeoutMillis: 30000,
+  allowExitOnIdle: false,
 });
+
+// helpful logs
+pool.on('error', (err) => {
+  console.error('[PG POOL ERROR]', err);
+});
+
+console.log('[DB CONFIG]', JSON.stringify({
+  host: process.env.PGHOST || defaultHost,
+  database: process.env.PGDATABASE,
+  user: process.env.PGUSER,
+  usingSocket: useSocket,
+  ssl: useSsl
+}));
 
 // --- schema (run once on boot) ---------------------------------------------
 async function initSchema() {
@@ -74,9 +88,9 @@ const SONG_SLOTS = ['Opener','Song 2','Song 3','Song 4','Song 5','Encore','Cover
 
 const PRESET_SESSIONS = [
   { id: "2025-12-19-port-chester-ny-capitol-1", title: "Dec 19, 2025 — The Capitol Theatre (Port Chester, NY)" },
-  { id: "2025-12-20-port-chester-ny-capitol-2", title: "Dec 20, 2025 — The Capitol Theatre (Port Chester, NY)" },
+  { id: "2025-12-20-port_chester-ny-capitol-2", title: "Dec 20, 2025 — The Capitol Theatre (Port Chester, NY)" },
   { id: "2025-12-30-denver-co-ogden-1",         title: "Dec 30, 2025 — Ogden Theatre (Denver, CO)" },
-  { id: "2025-12-31",         title: "Dec 31, 2025 — Ogden Theatre (Denver, CO)" },
+  { id: "2025-12-31-denver-co-ogden-2",         title: "Dec 31, 2025 — Ogden Theatre (Denver, CO)" }, // fixed slug
 ];
 
 async function ensureSession(sessionId, maybeOwner) {
@@ -108,8 +122,6 @@ async function buildSessionState(sessionId) {
   const s = await pool.query(`SELECT owner FROM sessions WHERE id = $1;`, [sessionId]);
   session.owner = s.rows[0]?.owner || null;
 
-  // Keep this collate stable; "C" puts capitals before lowercase; for true case-insensitive,
-  // consider lower(username) ORDER BY lower(username).
   const u = await pool.query(
     `SELECT username FROM session_users
       WHERE session_id = $1
@@ -138,33 +150,22 @@ const io = new Server(server);
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 app.get('/session/:id', (req, res) => res.sendFile(path.join(__dirname, 'session.html')));
-// add near your other app.get(...) routes in server.js
-app.get('/dbcheck', async (req, res) => {
-  try {
-    const r = await pool.query('SELECT 1 AS ok, NOW() AS ts');
-    res.type('text').send(`DB OK: ${r.rows[0].ok} @ ${r.rows[0].ts.toISOString?.() || r.rows[0].ts}`);
-  } catch (e) {
-    console.error('DBCHECK ERROR:', e);
-    res.status(500).type('text').send(`DB ERROR: ${e.message}`);
-  }
-});
-
 
 // index list
 app.get('/sessions', (req, res) => {
   res.json(PRESET_SESSIONS.map(s => ({ id: s.id, title: s.title })));
 });
 
+// health + db check
 app.get('/healthz', (req, res) => res.send('ok'));
-
-// quick DB probe for debugging Cloud Run connection/env
 app.get('/dbcheck', async (req, res) => {
   try {
-    const r = await pool.query('SELECT 1 AS ok, NOW() AS now');
-    res.status(200).send(`DB OK: ${r.rows[0].ok} @ ${r.rows[0].now.toISOString()}`);
+    const r = await pool.query('SELECT 1 AS ok, NOW() AS ts');
+    const ts = r.rows[0].ts instanceof Date ? r.rows[0].ts.toISOString() : r.rows[0].ts;
+    res.status(200).type('text').send(`DB OK: ${r.rows[0].ok} @ ${ts}`);
   } catch (e) {
     console.error('[DBCHECK ERROR]', e);
-    res.status(500).send('DB FAIL: ' + e.message);
+    res.status(500).type('text').send('DB FAIL: ' + e.message);
   }
 });
 
@@ -177,7 +178,7 @@ io.on('connection', (socket) => {
       return;
     }
     try {
-      console.log('[JOIN] sessionId=%s username=%s', cleanId, username);
+      console.log('[JOIN]', { cleanId, username });
       await ensureSession(cleanId, username);   // first joiner becomes owner
       await ensureUser(cleanId, username);
 
