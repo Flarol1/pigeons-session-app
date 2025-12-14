@@ -1,251 +1,237 @@
-// server.js
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
+const { Pool } = require('pg');
 
-//
-// 1. Try to enable SQLite, but don't die if it fails
-//
-let db = null;
-try {
-  const sqlite3 = require('sqlite3').verbose();
-  db = new sqlite3.Database('./data.db');
-  db.serialize(() => {
-    db.run(`
-      CREATE TABLE IF NOT EXISTS sessions (
-        id TEXT PRIMARY KEY,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-    db.run(`
-      CREATE TABLE IF NOT EXISTS user_picks (
-        session_id TEXT,
-        username   TEXT,
-        slot       TEXT,
-        value      TEXT,
-        PRIMARY KEY (session_id, username, slot)
-      )
-    `);
-  });
-  console.log('SQLite enabled');
-} catch (err) {
-  console.warn('SQLite not available, running in memory only:', err.message);
+// ---------- DB POOL (supports DATABASE_URL or individual vars) ----------
+function makePool() {
+  // Prefer DATABASE_URL if present
+  if (process.env.DATABASE_URL) {
+    // In Cloud Run with Unix socket, you can use:
+    // postgres://USER:PASS@/DBNAME?host=/cloudsql/INSTANCE
+    return new Pool({
+      connectionString: process.env.DATABASE_URL,
+      // If you enable a public IP with SSL, uncomment:
+      // ssl: { rejectUnauthorized: false }
+    });
+  }
+
+  // Otherwise use discrete vars
+  const config = {
+    user: process.env.PGUSER || 'postgres',
+    password: process.env.PGPASSWORD || '',
+    database: process.env.PGDATABASE || 'postgres',
+    host: process.env.PGHOST || '127.0.0.1', // For Cloud Run socket: /cloudsql/INSTANCE
+    port: +(process.env.PGPORT || 5432),
+    // ssl: { rejectUnauthorized: false } // only if using public IP with SSL
+  };
+  return new Pool(config);
 }
 
+const pool = makePool();
+
+// Simple helper so we can await pool queries
+async function q(text, params) {
+  const res = await pool.query(text, params);
+  return res;
+}
+
+// ---------- Constants / helpers ----------
+const SONG_SLOTS = [
+  'Opener', 'Song 2', 'Song 3', 'Song 4', 'Song 5', 'Encore', 'Cover', 'Bustout'
+];
+
+const PRESET_SESSIONS = [
+  { id: "2025-12-19-port-chester-ny-capitol-1",     title: "Dec 19, 2025 — The Capitol Theatre (Port Chester, NY)" },
+  { id: "2025-12-20-port-chester-ny-capitol-2",     title: "Dec 20, 2025 — The Capitol Theatre (Port Chester, NY)" },
+  { id: "2025-12-30-denver-co-ogden-1",             title: "Dec 30, 2025 — Ogden Theatre (Denver, CO)" },
+  { id: "2025-12-31-denver-co-ogden-2",             title: "Dec 31, 2025 — Ogden Theatre (Denver, CO)" },
+  { id: "2026-01-23-baltimore-md-soundstage-1",     title: "Jan 23, 2026 — Baltimore Soundstage (Baltimore, MD)" },
+  { id: "2026-01-24-baltimore-md-soundstage-2",     title: "Jan 24, 2026 — Baltimore Soundstage (Baltimore, MD)" },
+  { id: "2026-02-06-pittsburgh-pa-mr-smalls-1",     title: "Feb 6, 2026 — Mr. Smalls Theatre (Pittsburgh, PA)" },
+  { id: "2026-02-07-pittsburgh-pa-mr-smalls-2",     title: "Feb 7, 2026 — Mr. Smalls Theatre (Pittsburgh, PA)" },
+  { id: "2026-02-26-burlington-vt-higher-ground",   title: "Feb 26, 2026 — Higher Ground (Burlington, VT)" },
+  { id: "2026-02-27-portland-me-state-theatre",     title: "Feb 27, 2026 — State Theatre (Portland, ME)" },
+  { id: "2026-02-28-albany-ny-empire-live",         title: "Feb 28, 2026 — Empire Live (Albany, NY)" },
+  { id: "2026-03-04-savannah-ga-victory-north",     title: "Mar 4, 2026 — Victory North (Savannah, GA)" },
+  { id: "2026-03-05-jacksonville-fl-intuition",     title: "Mar 5, 2026 — Intuition Ale Works (Jacksonville, FL)" },
+  { id: "2026-03-06-sanford-fl-tuffys",             title: "Mar 6, 2026 — Tuffy’s Outdoor Stage (Sanford, FL)" },
+  { id: "2026-03-07-st-petersburg-fl-jannus",       title: "Mar 7, 2026 — Jannus Live (St. Petersburg, FL)" }
+];
+
+// ensure a session exists; set owner only if currently null
+async function ensureSession(sessionId, maybeOwner) {
+  await q(`INSERT INTO sessions (id) VALUES ($1) ON CONFLICT (id) DO NOTHING`, [sessionId]);
+
+  if (maybeOwner) {
+    await q(
+      `UPDATE sessions
+         SET owner = COALESCE(owner, $1)
+       WHERE id = $2`,
+      [maybeOwner, sessionId]
+    );
+  }
+}
+
+async function ensureUser(sessionId, username) {
+  await q(
+    `INSERT INTO session_users (session_id, username)
+     VALUES ($1, $2)
+     ON CONFLICT (session_id, username) DO NOTHING`,
+    [sessionId, username]
+  );
+}
+
+async function buildSessionState(sessionId) {
+  const session = { owner: null, users: [], userSongs: {} };
+
+  const ownerRow = await q(`SELECT owner FROM sessions WHERE id = $1`, [sessionId]);
+  session.owner = ownerRow.rows[0]?.owner || null;
+
+  const usersRes = await q(
+    `SELECT username
+       FROM session_users
+      WHERE session_id = $1
+      ORDER BY username COLLATE "C"`, // simple case-insensitive-ish order
+    [sessionId]
+  );
+  session.users = usersRes.rows.map(r => ({ socketId: null, username: r.username }));
+
+  const picksRes = await q(
+    `SELECT username, slot, value
+       FROM user_picks
+      WHERE session_id = $1`,
+    [sessionId]
+  );
+  for (const p of picksRes.rows) {
+    if (!session.userSongs[p.username]) session.userSongs[p.username] = {};
+    session.userSongs[p.username][p.slot] = p.value;
+  }
+  return session;
+}
+
+// ---------- HTTP / SOCKETS ----------
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-// in-memory structure (we’ll always keep this, even when DB works)
-const sessions = {};
-
-const SONG_SLOTS = [
-  'Opener',
-  'Song 2',
-  'Song 3',
-  'Song 4',
-  'Song 5',
-  'Encore',
-  'Cover',
-  'Bustout'
-];
-
-// tour sessions
-const PRESET_SESSIONS = [
-  { id: '2025-11-11-jackson-ms-duling-hall', title: 'Nov 11, 2025 — Duling Hall (Jackson, MS)' },
-  { id: '2025-11-12-houston-tx-the-heights-theater', title: 'Nov 12, 2025 — The Heights Theater (Houston, TX)' },
-  { id: '2025-11-14-austin-tx-mohawk', title: 'Nov 14, 2025 — Mohawk (Austin, TX)' },
-  { id: '2025-11-15-dallas-tx-echo-lounge', title: 'Nov 15, 2025 — The Echo Lounge & Music Hall (Dallas, TX)' },
-  { id: '2025-11-16-fayetteville-ar-georges-majestic', title: 'Nov 16, 2025 — George’s Majestic Lounge (Fayetteville, AR)' },
-  { id: '2025-11-18-omaha-ne-slowdown', title: 'Nov 18, 2025 — Slowdown (Omaha, NE)' },
-  { id: '2025-11-19-minneapolis-mn-fine-line', title: 'Nov 19, 2025 — Fine Line (Minneapolis, MN)' },
-  { id: '2025-11-20-madison-wi-majestic', title: 'Nov 20, 2025 — Majestic Theatre (Madison, WI)' },
-  { id: '2025-11-21-stl-mo-the-sovereign', title: 'Nov 21, 2025 — The Sovereign (St. Louis, MO)' },
-  { id: '2025-11-22-covington-ky-madison-theater', title: 'Nov 22, 2025 — Madison Theater (Covington, KY)' },
-  { id: '2025-12-05-richmond-va-the-national-1', title: 'Dec 5, 2025 — The National (Richmond, VA)' },
-  { id: '2025-12-06-richmond-va-the-national-2', title: 'Dec 6, 2025 — The National (Richmond, VA)' },
-  { id: '2025-12-19-port-chester-ny-capitol-1', title: 'Dec 19, 2025 — The Capitol Theatre (Port Chester, NY)' },
-  { id: '2025-12-20-port-chester-ny-capitol-2', title: 'Dec 20, 2025 — The Capitol Theatre (Port Chester, NY)' },
-  { id: '2025-12-30-denver-co-ogden-1', title: 'Dec 30, 2025 — Ogden Theatre (Denver, CO)' },
-  { id: '2025-12-31-denver-co-ogden-2', title: 'Dec 31, 2025 — Ogden Theatre (Denver, CO)' },
-  { id: '2026-01-23-baltimore-md-soundstage-1', title: 'Jan 23, 2026 — Baltimore Soundstage (Baltimore, MD)' },
-  { id: '2026-01-24-baltimore-md-soundstage-2', title: 'Jan 24, 2026 — Baltimore Soundstage (Baltimore, MD)' },
-  { id: '2026-02-06-pittsburgh-pa-mr-smalls-1', title: 'Feb 6, 2026 — Mr. Smalls Theatre (Pittsburgh, PA)' },
-  { id: '2026-02-07-pittsburgh-pa-mr-smalls-2', title: 'Feb 7, 2026 — Mr. Smalls Theatre (Pittsburgh, PA)' },
-  { id: '2026-02-26-burlington-vt-higher-ground', title: 'Feb 26, 2026 — Higher Ground (Burlington, VT)' },
-  { id: '2026-02-27-portland-me-state-theatre', title: 'Feb 27, 2026 — State Theatre (Portland, ME)' },
-  { id: '2026-02-28-albany-ny-empire-live', title: 'Feb 28, 2026 — Empire Live (Albany, NY)' },
-  { id: '2026-03-04-savannah-ga-victory-north', title: 'Mar 4, 2026 — Victory North (Savannah, GA)' },
-  { id: '2026-03-05-jacksonville-fl-intuition', title: 'Mar 5, 2026 — Intuition Ale Works (Jacksonville, FL)' },
-  { id: '2026-03-06-sanford-fl-tuffys', title: 'Mar 6, 2026 — Tuffy’s Outdoor Stage (Sanford, FL)' },
-  { id: '2026-03-07-st-petersburg-fl-jannus', title: 'Mar 7, 2026 — Jannus Live (St. Petersburg, FL)' }
-];
-
-// precreate in memory
-for (const s of PRESET_SESSIONS) {
-  if (!sessions[s.id]) sessions[s.id] = { owner: null, users: [], userSongs: {} };
-}
-
-// serve static files (index.html, session.html, etc.)
-app.use(express.static(path.join(__dirname)));
-
-// homepage
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'index.html'));
-});
-
-// session page
-app.get('/session/:id', (req, res) => {
-  res.sendFile(path.join(__dirname, 'session.html'));
-});
-
-// list sessions for index
+app.use(express.static(path.join(__dirname, 'public')));
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+app.get('/session/:id', (req, res) => res.sendFile(path.join(__dirname, 'session.html')));
 app.get('/sessions', (req, res) => {
-  res.json(PRESET_SESSIONS);
+  res.json(PRESET_SESSIONS.map(s => ({ id: s.id, title: s.title })));
 });
-
-// health
 app.get('/healthz', (req, res) => res.send('ok'));
 
-// -------------- SOCKETS --------------
 io.on('connection', (socket) => {
-  console.log('user connected');
+  // JOIN
+  socket.on('join', async ({ sessionId, username }) => {
+    try {
+      const cleanId = decodeURIComponent(sessionId || '').trim();
+      if (!cleanId || !username) {
+        socket.emit('error', 'Invalid session or username');
+        return;
+      }
 
-  // join
-  socket.on('join', ({ sessionId, username }) => {
-    const cleanId = decodeURIComponent(sessionId || '').trim();
-    if (!cleanId || !username) {
-      socket.emit('error', 'Invalid session or username');
-      return;
-    }
+      await ensureSession(cleanId, username); // first joiner becomes owner (if empty)
+      await ensureUser(cleanId, username);
 
-    if (!sessions[cleanId]) {
-      sessions[cleanId] = { owner: null, users: [], userSongs: {} };
-    }
-    const session = sessions[cleanId];
-
-    if (!session.owner) session.owner = username;
-
-    // add/update user
-    const existing = session.users.find(u => u.username === username);
-    if (existing) {
-      existing.socketId = socket.id;
-    } else {
-      session.users.push({ socketId: socket.id, username });
-    }
-
-    // if we have a DB, load picks for this session into memory
-    if (db) {
-      db.all(
-        `SELECT username, slot, value FROM user_picks WHERE session_id = ?`,
-        [cleanId],
-        (err, rows) => {
-          if (!err && rows) {
-            session.userSongs = {};
-            session.users.forEach(u => {
-              session.userSongs[u.username] = session.userSongs[u.username] || {};
-            });
-            rows.forEach(r => {
-              session.userSongs[r.username] = session.userSongs[r.username] || {};
-              session.userSongs[r.username][r.slot] = r.value;
-            });
-          }
-          socket.join(cleanId);
-          socket.emit('joined', cleanId);
-          io.to(cleanId).emit('update-session', session);
-        }
-      );
-    } else {
-      // no DB, just go
       socket.join(cleanId);
       socket.emit('joined', cleanId);
-      io.to(cleanId).emit('update-session', session);
+
+      const state = await buildSessionState(cleanId);
+      io.to(cleanId).emit('update-session', state);
+    } catch (err) {
+      console.error('join error', err);
+      socket.emit('error', 'Join failed.');
     }
   });
 
-  // set a song (auto-save)
-  socket.on('set-song', ({ sessionId, slot, value, username }) => {
-    const cleanId = decodeURIComponent(sessionId || '').trim();
-    const session = sessions[cleanId];
-    if (!session) return;
+  // SET SONG
+  socket.on('set-song', async ({ sessionId, slot, value, username }) => {
+    try {
+      const cleanId = decodeURIComponent(sessionId || '').trim();
+      if (!SONG_SLOTS.includes(slot)) return;
 
-    const caller = session.users.find(u => u.socketId === socket.id);
-    if (!caller || caller.username !== username) {
-      socket.emit('error', 'You can only edit your own board.');
-      return;
-    }
-    if (!SONG_SLOTS.includes(slot)) {
-      socket.emit('error', 'Invalid slot.');
-      return;
-    }
+      await ensureSession(cleanId);
+      await ensureUser(cleanId, username);
 
-    // in memory
-    session.userSongs[username] = session.userSongs[username] || {};
-    session.userSongs[username][slot] = value;
-
-    // persist if DB works
-    if (db) {
-      db.run(`INSERT OR IGNORE INTO sessions (id) VALUES (?)`, [cleanId]);
-      db.run(
+      await q(
         `INSERT INTO user_picks (session_id, username, slot, value)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT(session_id, username, slot) DO UPDATE SET value = excluded.value`,
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (session_id, username, slot)
+         DO UPDATE SET value = EXCLUDED.value`,
         [cleanId, username, slot, value]
       );
-    }
 
-    io.to(cleanId).emit('update-session', session);
+      const state = await buildSessionState(cleanId);
+      io.to(cleanId).emit('update-session', state);
+    } catch (err) {
+      console.error('set-song error', err);
+      socket.emit('error', 'Save failed.');
+    }
   });
 
-  // owner delete whole board
-  socket.on('delete-user-board', ({ sessionId, targetUsername }) => {
-    const cleanId = decodeURIComponent(sessionId || '').trim();
-    const session = sessions[cleanId];
-    if (!session) return;
-
-    const caller = session.users.find(u => u.socketId === socket.id);
-    if (!caller || caller.username !== session.owner) {
-      socket.emit('error', 'Only owner can delete a board.');
-      return;
+  // DELETE one slot
+  socket.on('delete-song', async ({ sessionId, slot, username }) => {
+    try {
+      const cleanId = decodeURIComponent(sessionId || '').trim();
+      await q(
+        `DELETE FROM user_picks
+          WHERE session_id = $1 AND username = $2 AND slot = $3`,
+        [cleanId, username, slot]
+      );
+      const state = await buildSessionState(cleanId);
+      io.to(cleanId).emit('update-session', state);
+    } catch (err) {
+      console.error('delete-song error', err);
+      socket.emit('error', 'Delete failed.');
     }
+  });
 
-    delete session.userSongs[targetUsername];
-    session.users = session.users.filter(u => u.username !== targetUsername);
+  // OWNER: DELETE a user's whole board
+  socket.on('delete-user-board', async ({ sessionId, targetUsername }) => {
+    try {
+      const cleanId = decodeURIComponent(sessionId || '').trim();
+      // (Owner check could be added here)
 
-    if (db) {
-      db.run(
-        `DELETE FROM user_picks WHERE session_id = ? AND username = ?`,
+      await q(
+        `DELETE FROM user_picks
+          WHERE session_id = $1 AND username = $2`,
         [cleanId, targetUsername]
       );
+      await q(
+        `DELETE FROM session_users
+          WHERE session_id = $1 AND username = $2`,
+        [cleanId, targetUsername]
+      );
+
+      const state = await buildSessionState(cleanId);
+      io.to(cleanId).emit('update-session', state);
+    } catch (err) {
+      console.error('delete-user-board error', err);
+      socket.emit('error', 'Delete board failed.');
     }
-
-    io.to(cleanId).emit('update-session', session);
   });
 
-  // clear all
-  socket.on('clear-all', ({ sessionId }) => {
-    const cleanId = decodeURIComponent(sessionId || '').trim();
-    const session = sessions[cleanId];
-    if (!session) return;
-
-    Object.keys(session.userSongs).forEach(u => (session.userSongs[u] = {}));
-
-    if (db) {
-      db.run(`DELETE FROM user_picks WHERE session_id = ?`, [cleanId]);
+  // CLEAR ALL picks (keep users)
+  socket.on('clear-all', async ({ sessionId }) => {
+    try {
+      const cleanId = decodeURIComponent(sessionId || '').trim();
+      await q(`DELETE FROM user_picks WHERE session_id = $1`, [cleanId]);
+      const state = await buildSessionState(cleanId);
+      io.to(cleanId).emit('update-session', state);
+    } catch (err) {
+      console.error('clear-all error', err);
+      socket.emit('error', 'Clear failed.');
     }
-
-    io.to(cleanId).emit('update-session', session);
   });
 
-  socket.on('disconnect', () => {
-    console.log('user disconnected');
-  });
+  socket.on('disconnect', () => {});
 });
 
-// -------------- START --------------
-// Cloud Run needs 0.0.0.0 and PORT=8080
 const PORT = process.env.PORT || 3005;
 server.listen(PORT, '0.0.0.0', () => {
-  console.log('Server running on port', PORT);
+  console.log(`Server running on port ${PORT}`);
 });
