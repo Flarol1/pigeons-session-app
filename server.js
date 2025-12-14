@@ -51,11 +51,12 @@ console.log(
       })
 );
 
+// Track DB readiness
+let dbReady = DB_DISABLED; // true if in-memory; for PG we'll flip true after init
+
 // ---- Schema (PG only) ------------------------------------------------------
 async function initSchema() {
   if (DB_DISABLED) return;
-
-  // We keep "owner" column for compatibility but never use it.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY,
@@ -63,7 +64,6 @@ async function initSchema() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
-
   await pool.query(`
     CREATE TABLE IF NOT EXISTS session_users (
       session_id TEXT NOT NULL,
@@ -72,7 +72,6 @@ async function initSchema() {
       FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
     );
   `);
-
   await pool.query(`
     CREATE TABLE IF NOT EXISTS user_picks (
       session_id TEXT NOT NULL,
@@ -92,7 +91,7 @@ const SONG_SLOTS = [
 
 const PRESET_SESSIONS = [
   { id: "2025-12-19-port-chester-ny-capitol-1", title: "Dec 19, 2025 — The Capitol Theatre (Port Chester, NY)" },
-  { id: "2025-12-20-port_chester-ny-capitol-2", title: "Dec 20, 2025 — The Capitol Theatre (Port Chester, NY)" },
+  { id: "2025-12-20-port-chester-ny-capitol-2", title: "Dec 20, 2025 — The Capitol Theatre (Port Chester, NY)" }, // normalized dashes
   { id: "2025-12-30-denver-co-ogden-1",         title: "Dec 30, 2025 — Ogden Theatre (Denver, CO)" },
   { id: "2025-12-31-denver-co-ogden-2",         title: "Dec 31, 2025 — Ogden Theatre (Denver, CO)" },
 ];
@@ -126,12 +125,17 @@ function memClearBoard(id, username) {
     if (key.startsWith(username + '|')) s.picks.delete(key);
   }
 }
+function memClearAll(id) {
+  const s = mem.sessions.get(id);
+  if (!s) return;
+  s.picks.clear();
+}
 function memBuildState(id) {
   const s = mem.sessions.get(id) || { users: new Set(), picks: new Map() };
   const state = { owner: null, users: [], userSongs: {} };
-  [...s.users].sort((a,b)=>a.localeCompare(b,'en',{sensitivity:'base'})).forEach(u=>{
-    state.users.push({ socketId: null, username: u });
-  });
+  [...s.users]
+    .sort((a,b)=>a.localeCompare(b,'en',{sensitivity:'base'}))
+    .forEach(u => state.users.push({ socketId: null, username: u }));
   for (const [key,val] of s.picks.entries()) {
     const [u, slot] = key.split('|');
     if (!state.userSongs[u]) state.userSongs[u] = {};
@@ -176,6 +180,12 @@ async function pgClearBoard(sessionId, username) {
     [sessionId, username]
   );
 }
+async function pgClearAll(sessionId) {
+  await pool.query(
+    `DELETE FROM user_picks WHERE session_id = $1;`,
+    [sessionId]
+  );
+}
 async function pgBuildState(sessionId) {
   const state = { owner: null, users: [], userSongs: {} };
   const u = await pool.query(
@@ -204,6 +214,7 @@ const api = DB_DISABLED
       upsertPick: memUpsertPick,
       deletePick: memDeletePick,
       clearBoard: memClearBoard,
+      clearAll: memClearAll,
       buildState: memBuildState,
     }
   : {
@@ -212,6 +223,7 @@ const api = DB_DISABLED
       upsertPick: pgUpsertPick,
       deletePick: pgDeletePick,
       clearBoard: pgClearBoard,
+      clearAll: pgClearAll,
       buildState: pgBuildState,
     };
 
@@ -240,7 +252,6 @@ app.get('/dbcheck', async (req, res) => {
   }
 });
 
-// ✅ SINGLE connection block
 io.on('connection', (socket) => {
   const readyOrDie = () => {
     if (!DB_DISABLED && !dbReady) {
@@ -259,8 +270,8 @@ io.on('connection', (socket) => {
       return;
     }
     try {
-      await api.ensureSession(cleanId, username);   // <-- await!
-      await api.ensureUser(cleanId, username);      // <-- await!
+      await api.ensureSession(cleanId);
+      await api.ensureUser(cleanId, username);
       socket.join(cleanId);
       socket.emit('joined', cleanId);
 
@@ -272,7 +283,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // SET SONG
+  // SET SONG (only your board)
   socket.on('set-song', async ({ sessionId, slot, value, username }) => {
     if (!readyOrDie()) return;
     const cleanId = decodeURIComponent(sessionId || '').trim();
@@ -287,7 +298,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // DELETE one slot
+  // DELETE one slot (only your board)
   socket.on('delete-song', async ({ sessionId, slot, username }) => {
     if (!readyOrDie()) return;
     const cleanId = decodeURIComponent(sessionId || '').trim();
@@ -301,7 +312,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // ✅ CLEAR ALL (works again)
+  // CLEAR ALL picks (keep users)
   socket.on('clear-all', async ({ sessionId }) => {
     if (!readyOrDie()) return;
     const cleanId = decodeURIComponent(sessionId || '').trim();
@@ -314,26 +325,7 @@ io.on('connection', (socket) => {
       socket.emit('error', 'Clear failed: ' + err.message);
     }
   });
-
-  // DELETE a user's entire board (only if you still expose it in the UI)
-  socket.on('delete-user-board', async ({ sessionId, targetUsername }) => {
-    if (!readyOrDie()) return;
-    const cleanId = decodeURIComponent(sessionId || '').trim();
-    try {
-      await api.deleteBoard(cleanId, targetUsername);
-      const state = await api.buildState(cleanId);
-      io.to(cleanId).emit('update-session', state);
-    } catch (err) {
-      console.error('[DELETE-BOARD ERROR]', err);
-      socket.emit('error', 'Delete board failed: ' + err.message);
-    }
-  });
 });
-
-  socket.on('disconnect', () => {
-    socketMap.delete(socket.id);
-  });
-
 
 // ---- boot ------------------------------------------------------------------
 const PORT = process.env.PORT || 8080;
@@ -343,5 +335,5 @@ server.listen(PORT, '0.0.0.0', () => {
 });
 
 initSchema()
-  .then(() => console.log('DB schema ready'))
+  .then(() => { dbReady = true; console.log('DB schema ready'); })
   .catch((e) => console.error('DB init failed (serving anyway):', e.message));
