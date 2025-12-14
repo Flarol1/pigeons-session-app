@@ -4,22 +4,22 @@ const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
 
-// ---- DB mode detection -----------------------------------------------------
+// ───────────────── DB mode detection ─────────────────
 const DB_DISABLED =
   String(process.env.DISABLE_DB || '').trim() === '1' ||
   ((!process.env.PGUSER || !process.env.PGPASSWORD || !process.env.PGDATABASE) &&
     !process.env.INSTANCE_CONNECTION_NAME);
 
+let pool = null;
 let useSocket = false;
 let useSsl = false;
-let pool = null;
 let defaultHost = process.env.PGHOST || 'localhost';
 
 if (!DB_DISABLED) {
   const { Pool } = require('pg');
   const INSTANCE_CONNECTION_NAME = process.env.INSTANCE_CONNECTION_NAME || '';
   defaultHost = INSTANCE_CONNECTION_NAME
-    ? `/cloudsql/${INSTANCE_CONNECTION_NAME}`
+    ? `/cloudsql/${INSTANCE_CONNECTION_NAME}` // Cloud Run unix socket
     : process.env.PGHOST || 'localhost';
 
   useSocket = String(defaultHost || '').startsWith('/cloudsql');
@@ -43,7 +43,7 @@ console.log(
   DB_DISABLED
     ? 'DB DISABLED → using in-memory'
     : JSON.stringify({
-        host: process.env.PGHOST || defaultHost,
+        host: process.env.PGHOST || (process.env.INSTANCE_CONNECTION_NAME ? `/cloudsql/${process.env.INSTANCE_CONNECTION_NAME}` : 'localhost'),
         db: process.env.PGDATABASE,
         user: process.env.PGUSER,
         usingSocket: useSocket,
@@ -51,12 +51,11 @@ console.log(
       })
 );
 
-// Track DB readiness
-let dbReady = DB_DISABLED; // true if in-memory; for PG we'll flip true after init
-
-// ---- Schema (PG only) ------------------------------------------------------
+// ───────────────── Schema (PG only) ─────────────────
 async function initSchema() {
   if (DB_DISABLED) return;
+
+  // Owner column kept for backward-compatibility; not used for permissions.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY,
@@ -64,6 +63,7 @@ async function initSchema() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS session_users (
       session_id TEXT NOT NULL,
@@ -72,6 +72,7 @@ async function initSchema() {
       FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
     );
   `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS user_picks (
       session_id TEXT NOT NULL,
@@ -84,19 +85,19 @@ async function initSchema() {
   `);
 }
 
-// ---- Data layer ------------------------------------------------------------
+// ───────────────── Data layer ─────────────────
 const SONG_SLOTS = [
   'Opener', 'Song 2', 'Song 3', 'Song 4', 'Song 5', 'Encore', 'Cover', 'Bustout'
 ];
 
 const PRESET_SESSIONS = [
   { id: "2025-12-19-port-chester-ny-capitol-1", title: "Dec 19, 2025 — The Capitol Theatre (Port Chester, NY)" },
-  { id: "2025-12-20-port-chester-ny-capitol-2", title: "Dec 20, 2025 — The Capitol Theatre (Port Chester, NY)" }, // normalized dashes
+  { id: "2025-12-20-port-chester-ny-capitol-2", title: "Dec 20, 2025 — The Capitol Theatre (Port Chester, NY)" },
   { id: "2025-12-30-denver-co-ogden-1",         title: "Dec 30, 2025 — Ogden Theatre (Denver, CO)" },
   { id: "2025-12-31-denver-co-ogden-2",         title: "Dec 31, 2025 — Ogden Theatre (Denver, CO)" },
 ];
 
-// In-memory (fallback) -------------------------------------------------------
+// In-memory fallback
 const mem = {
   sessions: new Map(), // id -> { users:Set, picks: Map("user|slot" -> value) }
 };
@@ -125,17 +126,12 @@ function memClearBoard(id, username) {
     if (key.startsWith(username + '|')) s.picks.delete(key);
   }
 }
-function memClearAll(id) {
-  const s = mem.sessions.get(id);
-  if (!s) return;
-  s.picks.clear();
-}
 function memBuildState(id) {
   const s = mem.sessions.get(id) || { users: new Set(), picks: new Map() };
   const state = { owner: null, users: [], userSongs: {} };
-  [...s.users]
-    .sort((a,b)=>a.localeCompare(b,'en',{sensitivity:'base'}))
-    .forEach(u => state.users.push({ socketId: null, username: u }));
+  [...s.users].sort((a,b)=>a.localeCompare(b,'en',{sensitivity:'base'})).forEach(u=>{
+    state.users.push({ socketId: null, username: u });
+  });
   for (const [key,val] of s.picks.entries()) {
     const [u, slot] = key.split('|');
     if (!state.userSongs[u]) state.userSongs[u] = {};
@@ -144,10 +140,11 @@ function memBuildState(id) {
   return state;
 }
 
-// Postgres implementations ---------------------------------------------------
+// Postgres impls
 async function pgEnsureSession(sessionId) {
   await pool.query(
-    `INSERT INTO sessions (id) VALUES ($1) ON CONFLICT (id) DO NOTHING;`,
+    `INSERT INTO sessions (id) VALUES ($1)
+     ON CONFLICT (id) DO NOTHING;`,
     [sessionId]
   );
 }
@@ -170,33 +167,30 @@ async function pgUpsertPick(sessionId, username, slot, value) {
 }
 async function pgDeletePick(sessionId, username, slot) {
   await pool.query(
-    `DELETE FROM user_picks WHERE session_id = $1 AND username = $2 AND slot = $3;`,
+    `DELETE FROM user_picks
+      WHERE session_id = $1 AND username = $2 AND slot = $3;`,
     [sessionId, username, slot]
   );
 }
 async function pgClearBoard(sessionId, username) {
   await pool.query(
-    `DELETE FROM user_picks WHERE session_id = $1 AND username = $2;`,
+    `DELETE FROM user_picks
+      WHERE session_id = $1 AND username = $2;`,
     [sessionId, username]
-  );
-}
-async function pgClearAll(sessionId) {
-  await pool.query(
-    `DELETE FROM user_picks WHERE session_id = $1;`,
-    [sessionId]
   );
 }
 async function pgBuildState(sessionId) {
   const state = { owner: null, users: [], userSongs: {} };
   const u = await pool.query(
     `SELECT username FROM session_users
-     WHERE session_id = $1
-     ORDER BY username COLLATE "C";`,
+      WHERE session_id = $1
+      ORDER BY username COLLATE "C";`,
     [sessionId]
   );
   state.users = u.rows.map(r => ({ socketId: null, username: r.username }));
   const picks = await pool.query(
-    `SELECT username, slot, value FROM user_picks WHERE session_id = $1;`,
+    `SELECT username, slot, value FROM user_picks
+      WHERE session_id = $1;`,
     [sessionId]
   );
   for (const row of picks.rows) {
@@ -206,7 +200,7 @@ async function pgBuildState(sessionId) {
   return state;
 }
 
-// Choose backend -------------------------------------------------------------
+// Choose backend (PG or memory)
 const api = DB_DISABLED
   ? {
       ensureSession: memEnsureSession,
@@ -214,7 +208,6 @@ const api = DB_DISABLED
       upsertPick: memUpsertPick,
       deletePick: memDeletePick,
       clearBoard: memClearBoard,
-      clearAll: memClearAll,
       buildState: memBuildState,
     }
   : {
@@ -223,23 +216,25 @@ const api = DB_DISABLED
       upsertPick: pgUpsertPick,
       deletePick: pgDeletePick,
       clearBoard: pgClearBoard,
-      clearAll: pgClearAll,
       buildState: pgBuildState,
     };
 
-// ---- App / sockets ---------------------------------------------------------
+// ───────────────── App / sockets ─────────────────
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
+// serve static + pages
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 app.get('/session/:id', (req, res) => res.sendFile(path.join(__dirname, 'session.html')));
 
+// index list for homepage
 app.get('/sessions', (req, res) => {
   res.json(PRESET_SESSIONS.map(s => ({ id: s.id, title: s.title })));
 });
 
+// health + dbcheck
 app.get('/healthz', (req, res) => res.send('ok'));
 app.get('/dbcheck', async (req, res) => {
   if (DB_DISABLED) return res.type('text').send('DB DISABLED (in-memory)');
@@ -252,18 +247,12 @@ app.get('/dbcheck', async (req, res) => {
   }
 });
 
-io.on('connection', (socket) => {
-  const readyOrDie = () => {
-    if (!DB_DISABLED && !dbReady) {
-      socket.emit('error', 'Database not ready yet. Try again in a moment.');
-      return false;
-    }
-    return true;
-  };
+// Track socket -> identity to prevent spoofing
+const socketMap = new Map(); // socket.id -> { sessionId, username }
 
-  // JOIN
+io.on('connection', (socket) => {
+  // JOIN: register user and room
   socket.on('join', async ({ sessionId, username }) => {
-    if (!readyOrDie()) return;
     const cleanId = decodeURIComponent(sessionId || '').trim();
     if (!cleanId || !username) {
       socket.emit('error', 'Invalid session or username');
@@ -272,7 +261,10 @@ io.on('connection', (socket) => {
     try {
       await api.ensureSession(cleanId);
       await api.ensureUser(cleanId, username);
+
       socket.join(cleanId);
+      socketMap.set(socket.id, { sessionId: cleanId, username });
+
       socket.emit('joined', cleanId);
 
       const state = await api.buildState(cleanId);
@@ -283,13 +275,17 @@ io.on('connection', (socket) => {
     }
   });
 
-  // SET SONG (only your board)
-  socket.on('set-song', async ({ sessionId, slot, value, username }) => {
-    if (!readyOrDie()) return;
-    const cleanId = decodeURIComponent(sessionId || '').trim();
+  // SET SONG: only allow caller to edit their board
+  socket.on('set-song', async ({ sessionId, slot, value }) => {
+    const who = socketMap.get(socket.id);
+    if (!who) return socket.emit('error', 'Not joined.');
     if (!SONG_SLOTS.includes(slot)) return;
+
+    const cleanId = who.sessionId || decodeURIComponent(sessionId || '').trim();
+    const caller = who.username;
+
     try {
-      await api.upsertPick(cleanId, username, slot, value);
+      await api.upsertPick(cleanId, caller, slot, value);
       const state = await api.buildState(cleanId);
       io.to(cleanId).emit('update-session', state);
     } catch (err) {
@@ -298,12 +294,15 @@ io.on('connection', (socket) => {
     }
   });
 
-  // DELETE one slot (only your board)
-  socket.on('delete-song', async ({ sessionId, slot, username }) => {
-    if (!readyOrDie()) return;
-    const cleanId = decodeURIComponent(sessionId || '').trim();
+  // DELETE one slot: only caller’s own pick
+  socket.on('delete-song', async ({ sessionId, slot }) => {
+    const who = socketMap.get(socket.id);
+    if (!who) return socket.emit('error', 'Not joined.');
+    const cleanId = who.sessionId || decodeURIComponent(sessionId || '').trim();
+    const caller = who.username;
+
     try {
-      await api.deletePick(cleanId, username, slot);
+      await api.deletePick(cleanId, caller, slot);
       const state = await api.buildState(cleanId);
       io.to(cleanId).emit('update-session', state);
     } catch (err) {
@@ -312,12 +311,15 @@ io.on('connection', (socket) => {
     }
   });
 
-  // CLEAR ALL picks (keep users)
+  // CLEAR ALL: now only clears the caller’s board
   socket.on('clear-all', async ({ sessionId }) => {
-    if (!readyOrDie()) return;
-    const cleanId = decodeURIComponent(sessionId || '').trim();
+    const who = socketMap.get(socket.id);
+    if (!who) return socket.emit('error', 'Not joined.');
+    const cleanId = who.sessionId || decodeURIComponent(sessionId || '').trim();
+    const caller = who.username;
+
     try {
-      await api.clearAll(cleanId);
+      await api.clearBoard(cleanId, caller);
       const state = await api.buildState(cleanId);
       io.to(cleanId).emit('update-session', state);
     } catch (err) {
@@ -325,15 +327,25 @@ io.on('connection', (socket) => {
       socket.emit('error', 'Clear failed: ' + err.message);
     }
   });
+
+  // “Delete user board” is disabled intentionally
+  socket.on('delete-user-board', () => {
+    socket.emit('error', 'This action is disabled.');
+  });
+
+  socket.on('disconnect', () => {
+    socketMap.delete(socket.id);
+  });
 });
 
-// ---- boot ------------------------------------------------------------------
-const PORT = process.env.PORT || 8080;
+// ───────────────── boot ────────────────
+const PORT = process.env.PORT || 8080; // Cloud Run expects 8080
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`[DB CONFIG] host=${process.env.PGHOST || defaultHost} usingSocket=${useSocket} ssl=${useSsl}`);
 });
 
+// init DB without blocking the port (Cloud Run health passes)
 initSchema()
-  .then(() => { dbReady = true; console.log('DB schema ready'); })
+  .then(() => console.log('DB schema ready'))
   .catch((e) => console.error('DB init failed (serving anyway):', e.message));
