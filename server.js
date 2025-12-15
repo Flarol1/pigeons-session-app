@@ -95,6 +95,7 @@ const PRESET_SESSIONS = [
   { id: "2025-12-20-port-chester-ny-capitol-2", title: "Dec 20, 2025 — The Capitol Theatre (Port Chester, NY)" },
   { id: "2025-12-30-denver-co-ogden-1",         title: "Dec 30, 2025 — Ogden Theatre (Denver, CO)" },
   { id: "2025-12-31-denver-co-ogden-2",         title: "Dec 31, 2025 — Ogden Theatre (Denver, CO)" },
+    { id: "FakeTest",         title: "TEST SHOW" },
 ];
 
 // In-memory fallback
