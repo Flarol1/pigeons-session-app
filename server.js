@@ -87,7 +87,7 @@ async function initSchema() {
 
 // ───────────────── Data layer ─────────────────
 const SONG_SLOTS = [
-  'Opener', 'Song 2', 'Song 3', 'Song 4', 'Song 5', 'Encore', 'Cover', 'Bustout'
+  'Opener', 'Song 2', 'Song 3', 'Song 4', 'Song 5', 'Song 6', 'Encore', 'Cover', 'Bustout'
 ];
 
 const PRESET_SESSIONS = [
