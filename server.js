@@ -43,7 +43,11 @@ console.log(
   DB_DISABLED
     ? 'DB DISABLED → using in-memory'
     : JSON.stringify({
-        host: process.env.PGHOST || (process.env.INSTANCE_CONNECTION_NAME ? `/cloudsql/${process.env.INSTANCE_CONNECTION_NAME}` : 'localhost'),
+        host:
+          process.env.PGHOST ||
+          (process.env.INSTANCE_CONNECTION_NAME
+            ? `/cloudsql/${process.env.INSTANCE_CONNECTION_NAME}`
+            : 'localhost'),
         db: process.env.PGDATABASE,
         user: process.env.PGUSER,
         usingSocket: useSocket,
@@ -73,6 +77,7 @@ async function initSchema() {
     );
   `);
 
+  // NOTE: slot is TEXT → no DB change required to support "Song 6"
   await pool.query(`
     CREATE TABLE IF NOT EXISTS user_picks (
       session_id TEXT NOT NULL,
@@ -87,15 +92,23 @@ async function initSchema() {
 
 // ───────────────── Data layer ─────────────────
 const SONG_SLOTS = [
-  'Opener', 'Song 2', 'Song 3', 'Song 4', 'Song 5', 'Song 6', 'Encore', 'Cover', 'Bustout'
+  'Opener',
+  'Song 2',
+  'Song 3',
+  'Song 4',
+  'Song 5',
+  'Song 6', // ✅ included
+  'Encore',
+  'Cover',
+  'Bustout',
 ];
 
 const PRESET_SESSIONS = [
-  { id: "2025-12-19-port-chester-ny-capitol-1", title: "Dec 19, 2025 — The Capitol Theatre (Port Chester, NY)" },
-  { id: "2025-12-20-port-chester-ny-capitol-2", title: "Dec 20, 2025 — The Capitol Theatre (Port Chester, NY)" },
-  { id: "2025-12-30-denver-co-ogden-1",         title: "Dec 30, 2025 — Ogden Theatre (Denver, CO)" },
-  { id: "2025-12-31-denver-co-ogden-2",         title: "Dec 31, 2025 — Ogden Theatre (Denver, CO)" },
-    { id: "FakeTest",         title: "TEST SHOW" },
+  { id: '2025-12-19-port-chester-ny-capitol-1', title: 'Dec 19, 2025 — The Capitol Theatre (Port Chester, NY)' },
+  { id: '2025-12-20-port-chester-ny-capitol-2', title: 'Dec 20, 2025 — The Capitol Theatre (Port Chester, NY)' },
+  { id: '2025-12-30-denver-co-ogden-1', title: 'Dec 30, 2025 — Ogden Theatre (Denver, CO)' },
+  { id: '2025-12-31-denver-co-ogden-2', title: 'Dec 31, 2025 — Ogden Theatre (Denver, CO)' },
+  { id: 'FakeTest', title: 'TEST SHOW' },
 ];
 
 // In-memory fallback
@@ -130,10 +143,12 @@ function memClearBoard(id, username) {
 function memBuildState(id) {
   const s = mem.sessions.get(id) || { users: new Set(), picks: new Map() };
   const state = { owner: null, users: [], userSongs: {} };
-  [...s.users].sort((a,b)=>a.localeCompare(b,'en',{sensitivity:'base'})).forEach(u=>{
-    state.users.push({ socketId: null, username: u });
-  });
-  for (const [key,val] of s.picks.entries()) {
+  [...s.users]
+    .sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' }))
+    .forEach((u) => {
+      state.users.push({ socketId: null, username: u });
+    });
+  for (const [key, val] of s.picks.entries()) {
     const [u, slot] = key.split('|');
     if (!state.userSongs[u]) state.userSongs[u] = {};
     state.userSongs[u][slot] = val;
@@ -188,7 +203,7 @@ async function pgBuildState(sessionId) {
       ORDER BY username COLLATE "C";`,
     [sessionId]
   );
-  state.users = u.rows.map(r => ({ socketId: null, username: r.username }));
+  state.users = u.rows.map((r) => ({ socketId: null, username: r.username }));
   const picks = await pool.query(
     `SELECT username, slot, value FROM user_picks
       WHERE session_id = $1;`,
@@ -232,7 +247,7 @@ app.get('/session/:id', (req, res) => res.sendFile(path.join(__dirname, 'session
 
 // index list for homepage
 app.get('/sessions', (req, res) => {
-  res.json(PRESET_SESSIONS.map(s => ({ id: s.id, title: s.title })));
+  res.json(PRESET_SESSIONS.map((s) => ({ id: s.id, title: s.title })));
 });
 
 // health + dbcheck
@@ -255,16 +270,19 @@ io.on('connection', (socket) => {
   // JOIN: register user and room
   socket.on('join', async ({ sessionId, username }) => {
     const cleanId = decodeURIComponent(sessionId || '').trim();
-    if (!cleanId || !username) {
+    const cleanUser = String(username || '').trim();
+
+    if (!cleanId || !cleanUser) {
       socket.emit('error', 'Invalid session or username');
       return;
     }
+
     try {
       await api.ensureSession(cleanId);
-      await api.ensureUser(cleanId, username);
+      await api.ensureUser(cleanId, cleanUser);
 
       socket.join(cleanId);
-      socketMap.set(socket.id, { sessionId: cleanId, username });
+      socketMap.set(socket.id, { sessionId: cleanId, username: cleanUser });
 
       socket.emit('joined', cleanId);
 
@@ -280,13 +298,28 @@ io.on('connection', (socket) => {
   socket.on('set-song', async ({ sessionId, slot, value }) => {
     const who = socketMap.get(socket.id);
     if (!who) return socket.emit('error', 'Not joined.');
-    if (!SONG_SLOTS.includes(slot)) return;
 
     const cleanId = who.sessionId || decodeURIComponent(sessionId || '').trim();
     const caller = who.username;
 
+    const cleanSlot = String(slot || '').trim();        // ✅ normalize
+    const cleanValue = String(value ?? '').trim();      // ✅ normalize
+
+    if (!SONG_SLOTS.includes(cleanSlot)) {
+      return socket.emit(
+        'error',
+        `Invalid slot "${cleanSlot}". Allowed: ${SONG_SLOTS.join(', ')}`
+      );
+    }
+
     try {
-      await api.upsertPick(cleanId, caller, slot, value);
+      // Optional UX: empty value deletes the pick
+      if (!cleanValue) {
+        await api.deletePick(cleanId, caller, cleanSlot);
+      } else {
+        await api.upsertPick(cleanId, caller, cleanSlot, cleanValue);
+      }
+
       const state = await api.buildState(cleanId);
       io.to(cleanId).emit('update-session', state);
     } catch (err) {
@@ -299,11 +332,13 @@ io.on('connection', (socket) => {
   socket.on('delete-song', async ({ sessionId, slot }) => {
     const who = socketMap.get(socket.id);
     if (!who) return socket.emit('error', 'Not joined.');
+
     const cleanId = who.sessionId || decodeURIComponent(sessionId || '').trim();
     const caller = who.username;
+    const cleanSlot = String(slot || '').trim();
 
     try {
-      await api.deletePick(cleanId, caller, slot);
+      await api.deletePick(cleanId, caller, cleanSlot);
       const state = await api.buildState(cleanId);
       io.to(cleanId).emit('update-session', state);
     } catch (err) {
@@ -316,6 +351,7 @@ io.on('connection', (socket) => {
   socket.on('clear-all', async ({ sessionId }) => {
     const who = socketMap.get(socket.id);
     if (!who) return socket.emit('error', 'Not joined.');
+
     const cleanId = who.sessionId || decodeURIComponent(sessionId || '').trim();
     const caller = who.username;
 
