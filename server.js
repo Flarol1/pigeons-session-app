@@ -108,8 +108,39 @@ const PRESET_SESSIONS = [
   { id: '2025-12-20-port-chester-ny-capitol-2', title: 'Dec 20, 2025 — The Capitol Theatre (Port Chester, NY)' },
   { id: '2025-12-30-denver-co-ogden-1', title: 'Dec 30, 2025 — Ogden Theatre (Denver, CO)' },
   { id: '2025-12-31-denver-co-ogden-2', title: 'Dec 31, 2025 — Ogden Theatre (Denver, CO)' },
-  { id: 'FakeTest', title: 'TEST SHOW' },
-];
+
+  { id: '2026-01-23-baltimore-md-soundstage-1', title: 'Jan 23, 2026 — Baltimore Soundstage (Baltimore, MD)' },
+  { id: '2026-01-24-baltimore-md-soundstage-2', title: 'Jan 24, 2026 — Baltimore Soundstage (Baltimore, MD)' },
+
+  { id: '2026-02-06-pittsburgh-pa-mr-smalls-1', title: 'Feb 6, 2026 — Mr. Smalls Theatre (Pittsburgh, PA)' },
+  { id: '2026-02-07-pittsburgh-pa-mr-smalls-2', title: 'Feb 7, 2026 — Mr. Smalls Theatre (Pittsburgh, PA)' },
+
+  { id: '2026-02-26-burlington-vt-higher-ground-1', title: 'Feb 26, 2026 — Higher Ground (Burlington, VT)' },
+  { id: '2026-02-27-portland-me-state-theatre-1', title: 'Feb 27, 2026 — State Theatre (Portland, ME)' },
+  { id: '2026-02-28-albany-ny-empire-live-1', title: 'Feb 28, 2026 — Empire Live (Albany, NY)' },
+
+  { id: '2026-03-04-savannah-ga-victory-north-1', title: 'Mar 4, 2026 — Victory North (Savannah, GA)' },
+  { id: '2026-03-05-jacksonville-fl-intuition-ale-works-1', title: 'Mar 5, 2026 — Intuition Ale Works (Jacksonville, FL)' },
+
+  { id: '2026-03-06-sanford-fl-tuffys-outdoor-stage-1', title: "Mar 6, 2026 — Tuffy's Outdoor Stage (Sanford, FL)" },
+  { id: '2026-03-07-st-petersburg-fl-jannus-live-1', title: 'Mar 7, 2026 — Jannus Live (St. Petersburg, FL)' },
+  { id: '2026-03-08-fort-lauderdale-fl-culture-room-1', title: 'Mar 8, 2026 — Culture Room (Fort Lauderdale, FL)' },
+
+  { id: '2026-03-10-birmingham-al-workplay-theatre-1', title: 'Mar 10, 2026 — WorkPlay Theatre (Birmingham, AL)' },
+  { id: '2026-03-11-nashville-tn-the-basement-east-1', title: 'Mar 11, 2026 — The Basement East (Nashville, TN)' },
+  { id: '2026-03-12-indianapolis-in-the-vogue-theatre-1', title: 'Mar 12, 2026 — The Vogue Theatre (Indianapolis, IN)' },
+  { id: '2026-03-13-detroit-mi-saint-andrews-hall-1', title: "Mar 13, 2026 — Saint Andrew's Hall (Detroit, MI)" },
+  { id: '2026-03-14-columbus-oh-the-bluestone-1', title: 'Mar 14, 2026 — The Bluestone (Columbus, OH)' },
+
+  { id: '2026-03-28-estes-park-co-frozen-dead-guy-days-coffin-race-1', title: 'Mar 28, 2026 — Frozen Dead Guy Days & Coffin Race (Estes Park, CO)' },
+  { id: '2026-08-06-new-river-gorge-wv-domefest-1', title: 'Aug 6, 2026 — Domefest (New River Gorge, WV)' },
+  { id: '2026-08-07-new-river-gorge-wv-domefest-2', title: 'Aug 7, 2026 — Domefest (New River Gorge, WV)' },
+  { id: '2026-08-08-new-river-gorge-wv-domefest-3', title: 'Aug 8, 2026 — Domefest (New River Gorge, WV)' },
+
+]
+
+;
+
 
 // In-memory fallback
 const mem = {
