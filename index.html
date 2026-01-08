@@ -2,214 +2,184 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Pigeons Setlist Picks</title>
-  <script src="/socket.io/socket.io.js"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Pigeons Sessions</title>
   <style>
-    :root {
-      --bg: #0f172a;
-      --bg-light: #111827;
-      --card: #1f2937;
-      --accent: #22c55e;
+    :root{
+      --bg: radial-gradient(circle at top, #0f172a 0%, #020617 55%);
+      --panel: rgba(2,6,23,.28);
+      --card: rgba(15,23,42,.55);
+      --border: rgba(148,163,184,.18);
       --text: #e2e8f0;
-      --muted: #94a3b8;
+      --muted:#94a3b8;
+      --accent:#22c55e;
     }
-    * {
-      box-sizing: border-box;
+    *{ box-sizing:border-box }
+    body{
+      margin:0; background:var(--bg); color:var(--text); font-family: system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+      min-height:100vh; display:flex; flex-direction:column;
     }
-    body {
-      margin: 0;
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: radial-gradient(circle at top, #1f2937, #0f172a 55%);
-      color: var(--text);
-      min-height: 100vh;
+    header{
+      display:flex; align-items:center; justify-content:space-between;
+      padding:12px 16px; border-bottom:1px solid rgba(148,163,184,.12);
+      background: rgba(2,6,23,.18); backdrop-filter: blur(6px);
     }
-    /* top bar */
-    header {
-      background: rgba(15, 23, 42, 0.75);
-      backdrop-filter: blur(6px);
-      border-bottom: 1px solid rgba(226, 232, 240, 0.1);
-      padding: 14px 20px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      position: sticky;
-      top: 0;
-      z-index: 10;
+    header h1{ margin:0; font-size:1rem; letter-spacing:.02em }
+    #search{
+      background: rgba(2,6,23,.6); border:1px solid var(--border);
+      color:var(--text); border-radius:.6rem; padding:.45rem .6rem; width:280px;
+      outline:none;
     }
-    header .title {
-      font-weight: 700;
-      letter-spacing: .02em;
+    #search:focus{ border-color: rgba(34,197,94,.6); box-shadow:0 0 0 2px rgba(34,197,94,.12) }
+
+    .layout{
+      display:grid; grid-template-columns: 280px 1fr; gap:14px;
+      width:min(1200px, 100%); margin:14px auto; padding:0 12px;
     }
-    header a {
-      color: var(--text);
-      text-decoration: none;
-      font-size: .9rem;
-      opacity: .8;
+    aside{
+      background: var(--panel); border:1px solid var(--border); border-radius:14px;
+      padding:12px; height: calc(100vh - 120px); position:sticky; top:14px; overflow:auto;
     }
-    header a:hover {
-      opacity: 1;
+    .panel{
+      background: var(--panel); border:1px solid var(--border); border-radius:14px; padding:12px;
+    }
+    h2{
+      margin:0 0 8px; font-size:.9rem; color:var(--muted); text-transform:uppercase; letter-spacing:.08em;
     }
 
-    /* layout */
-    .container {
-      max-width: 1100px;
-      margin: 0 auto;
-      padding: 24px 16px 48px;
+    .list{
+      display:flex; flex-direction:column; gap:6px;
+    }
+    .item{
+      background: var(--card); border:1px solid rgba(148,163,184,.12);
+      border-radius:10px; padding:10px; cursor:pointer;
+      display:flex; flex-direction:column; gap:4px;
+    }
+    .item:hover{ border-color: rgba(34,197,94,.5) }
+    .date{ font-size:.75rem; color:var(--muted) }
+    .title{ font-weight:600; font-size:.9rem }
+
+    .grid{
+      display:grid; grid-template-columns: repeat(auto-fill, minmax(260px,1fr)); gap:10px;
     }
 
-    /* hero */
-    .hero {
-      text-align: center;
-      margin-bottom: 28px;
-    }
-    .hero h1 {
-      margin: 0 0 10px;
-      font-size: clamp(1.9rem, 3vw, 2.4rem);
-    }
-    .hero p {
-      margin: 0;
-      color: var(--muted);
+    .empty{
+      padding:10px; color:var(--muted); font-size:.9rem;
     }
 
-    /* grid of sessions */
-    .sessions-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-      gap: 16px;
-      margin-top: 20px;
-    }
-
-    .session-card {
-      background: rgba(15, 23, 42, 0.3);
-      border: 1px solid rgba(148, 163, 184, 0.1);
-      border-radius: 14px;
-      padding: 16px 16px 14px;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      transition: transform .12s ease-out, border .12s ease-out, box-shadow .12s ease-out;
-      cursor: pointer;
-    }
-    .session-card:hover {
-      transform: translateY(-2px);
-      border: 1px solid rgba(34, 197, 94, 0.5);
-      box-shadow: 0 12px 24px rgba(0,0,0,.15);
-    }
-    .session-title {
-      font-weight: 600;
-      line-height: 1.2;
-    }
-    .session-meta {
-      font-size: .75rem;
-      color: var(--muted);
-    }
-    .session-link {
-      margin-top: 6px;
-      background: rgba(34, 197, 94, 0.15);
-      border: 1px solid rgba(34, 197, 94, 0.25);
-      color: #ecfdf3;
-      font-size: .75rem;
-      padding: 6px 10px;
-      border-radius: 9999px;
-      width: fit-content;
-      text-decoration: none;
-    }
-    .session-link:hover {
-      background: rgba(34, 197, 94, 0.35);
-    }
-
-    /* footer-ish note */
-    .small-note {
-      margin-top: 32px;
-      text-align: center;
-      color: rgba(226,232,240,.4);
-      font-size: .7rem;
-    }
-
-    @media (max-width: 600px) {
-      header {
-        flex-direction: column;
-        gap: 6px;
-        text-align: center;
-      }
-      .container {
-        padding-inline: 12px;
-      }
+    @media (max-width: 860px){
+      .layout{ grid-template-columns: 1fr; }
+      aside{ position:static; height:auto }
     }
   </style>
 </head>
 <body>
   <header>
-    <div class="title">Pigeons Session Picker</div>
-    <a href="/">Home</a>
+    <h1>Pigeons Sessions</h1>
+    <input id="search" type="text" placeholder="Search city/venue/date…"/>
   </header>
 
-  <main class="container">
-    <section class="hero">
-      <h1>Pick your show and add your set ideas 🎶</h1>
-      <p>Tap the date you’re going to — it opens a shared board for that show.</p>
-    </section>
+  <div class="layout">
+    <aside>
+      <h2>Past shows</h2>
+      <div id="pastList" class="list"></div>
+    </aside>
 
-    <section>
-      <h2 style="font-size:1rem; font-weight:600; margin-bottom:10px;">Tour Dates</h2>
-      <div id="sessions" class="sessions-grid">
-        <!-- cards go here -->
-      </div>
-    </section>
-
- 
-  </main>
+    <main class="panel">
+      <h2>Upcoming shows</h2>
+      <div id="upcomingGrid" class="grid"></div>
+      <div id="upcomingEmpty" class="empty" style="display:none">No upcoming matches.</div>
+    </main>
+  </div>
 
   <script>
-    // we don't actually need socket.io here right now, but it's fine if it's loaded
-    function loadSessions() {
-      fetch('/sessions')
-        .then(res => res.json())
-        .then(list => {
-          const grid = document.getElementById('sessions');
-          grid.innerHTML = '';
-          if (!list || list.length === 0) {
-            const div = document.createElement('div');
-            div.textContent = 'No sessions.';
-            grid.appendChild(div);
-            return;
-          }
+    const pastList = document.getElementById('pastList');
+    const upcomingGrid = document.getElementById('upcomingGrid');
+    const upcomingEmpty = document.getElementById('upcomingEmpty');
+    const search = document.getElementById('search');
 
-          list.forEach(({ id, title }) => {
-            const card = document.createElement('div');
-            card.className = 'session-card';
-            card.onclick = () => {
-              window.location.href = '/session/' + encodeURIComponent(id);
-            };
-
-            const name = document.createElement('div');
-            name.className = 'session-title';
-            name.textContent = title;
-            card.appendChild(name);
-
-            const meta = document.createElement('div');
-            meta.className = 'session-meta';
-            meta.textContent = id.replace(/-/g, ' ');
-            card.appendChild(meta);
-
-            const link = document.createElement('a');
-            link.className = 'session-link';
-            link.href = '/session/' + encodeURIComponent(id);
-            link.textContent = 'Open session →';
-            card.appendChild(link);
-
-            grid.appendChild(card);
-          });
-        })
-        .catch(err => {
-          console.error('Error fetching sessions', err);
-        });
+    // parse "YYYY-MM-DD" from id like "2026-01-23-baltimore-md-soundstage-1"
+    function parseDateFromId(id){
+      const d = id.slice(0,10);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+        const dt = new Date(d + 'T00:00:00');
+        return isNaN(dt) ? null : dt;
+      }
+      return null;
+    }
+    function fmt(dt){
+      try{
+        return dt.toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'});
+      }catch{ return String(dt).slice(0,10); }
+    }
+    function matchesFilter(item, q){
+      if(!q) return true;
+      const s = (item.title + ' ' + item.id).toLowerCase();
+      return s.includes(q.toLowerCase());
+    }
+    function itemEl(s){
+      const dt = parseDateFromId(s.id);
+      const div = document.createElement('div');
+      div.className = 'item';
+      div.onclick = () => location.href = `/session/${encodeURIComponent(s.id)}`;
+      const d = document.createElement('div');
+      d.className = 'date';
+      d.textContent = dt ? fmt(dt) : 'No date';
+      const t = document.createElement('div');
+      t.className = 'title';
+      t.textContent = s.title || s.id;
+      div.appendChild(d); div.appendChild(t);
+      return div;
     }
 
-    loadSessions();
-    // if you want to refresh occasionally:
-    // setInterval(loadSessions, 120000);
+    let all = [];
+    function render(){
+      const q = search.value.trim();
+
+      // split by date
+      const today = new Date();
+      today.setHours(0,0,0,0);
+
+      const upcoming = [];
+      const past = [];
+
+      for (const s of all){
+        if (!matchesFilter(s, q)) continue;
+        const dt = parseDateFromId(s.id);
+        if (dt && dt >= today) upcoming.push(s);
+        else past.push(s);
+      }
+
+      // sort: upcoming asc by date, then title; past desc by date
+      const safeDate = (s) => parseDateFromId(s.id)?.getTime() ?? 0;
+      upcoming.sort((a,b)=> safeDate(a)-safeDate(b) || a.title.localeCompare(b.title));
+      past.sort((a,b)=> safeDate(b)-safeDate(a) || a.title.localeCompare(b.title));
+
+      // draw
+      upcomingGrid.innerHTML = '';
+      pastList.innerHTML = '';
+
+      for (const s of upcoming) upcomingGrid.appendChild(itemEl(s));
+      for (const s of past) pastList.appendChild(itemEl(s));
+
+      upcomingEmpty.style.display = upcoming.length ? 'none' : 'block';
+    }
+
+    async function boot(){
+      try{
+        const res = await fetch('/sessions');
+        const json = await res.json();
+        // Expect: [{id, title}]
+        all = Array.isArray(json) ? json : [];
+      }catch(e){
+        console.error('Failed to load sessions:', e);
+        all = [];
+      }
+      render();
+    }
+
+    search.addEventListener('input', render);
+    boot();
   </script>
 </body>
 </html>
