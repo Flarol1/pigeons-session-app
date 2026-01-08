@@ -222,6 +222,20 @@
       body {
         padding: .7rem;
       }
+      /* add near your other input/select styles */
+.inline-input {
+  background: rgba(2,6,23,0.9);
+  border: 1px solid rgba(148,163,184,0.45);
+  border-radius: .45rem;
+  padding: .35rem .4rem;
+  color: #e2e8f0;
+  font-size: .8rem;
+  outline: none;
+}
+.inline-input:focus {
+  border-color: rgba(34,197,94,0.7);
+  box-shadow: 0 0 0 2px rgba(34,197,94,0.12);
+}
     }
   </style>
 </head>
@@ -389,71 +403,74 @@
           card.appendChild(value);
 
           // only my board gets the select
-         if (isMyBoard) {
-  // special case: Cover gets a text box
-  if (slot === "Cover") {
+   if (isMyBoard) {
+  const useCustomInitially = Boolean(currentVal && !SONG_LIBRARY.includes(currentVal));
+
+  const makeAndWireInput = (prefill = '') => {
     const input = document.createElement('input');
     input.type = 'text';
-    input.placeholder = 'Type a cover...';
-    input.value = currentVal || '';
-    input.style.background = 'rgba(2,6,23,0.9)';
-    input.style.border = '1px solid rgba(148,163,184,0.45)';
-    input.style.borderRadius = '.45rem';
-    input.style.padding = '.35rem .4rem';
-    input.style.color = '#e2e8f0';
+    input.className = 'inline-input';
+    input.placeholder = 'Type a song…';
+    input.value = prefill;
 
-    // save on Enter or when leaving field
     const save = () => {
       const val = input.value.trim();
-      if (!val) return;
-      socket.emit('set-song', {
-        sessionId,
-        slot,
-        value: val,
-        username
-      });
+      if (!val) return; // don’t save empty
+      socket.emit('set-song', { sessionId, slot, value: val, username });
     };
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') save();
-    });
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
     input.addEventListener('blur', save);
 
-    card.appendChild(input);
+    return input;
+  };
+
+  if (useCustomInitially || slot === 'Cover') {
+    // start with a text box if value isn’t in the library or it’s the Cover slot
+    card.appendChild(makeAndWireInput(currentVal || ''));
   } else {
-    // normal slots → dropdown
     const select = document.createElement('select');
 
+    // placeholder
     const placeholder = document.createElement('option');
     placeholder.value = '';
-    placeholder.textContent = 'Choose song...';
     placeholder.disabled = true;
+    placeholder.textContent = 'Choose song…';
     if (!currentVal) placeholder.selected = true;
     select.appendChild(placeholder);
 
+    // “Type your own…” option
+    const customOpt = document.createElement('option');
+    customOpt.value = '__CUSTOM__';
+    customOpt.textContent = '— Type your own… —';
+    select.appendChild(customOpt);
+
+    // library options
     SONG_LIBRARY.forEach(song => {
       const opt = document.createElement('option');
       opt.value = song;
       opt.textContent = song;
-      if (currentVal && currentVal === song) {
-        opt.selected = true;
-      }
+      if (currentVal && currentVal === song) opt.selected = true;
       select.appendChild(opt);
     });
 
     select.addEventListener('change', () => {
       const chosen = select.value;
       if (!chosen) return;
-      socket.emit('set-song', {
-        sessionId,
-        slot,
-        value: chosen,
-        username
-      });
+
+      if (chosen === '__CUSTOM__') {
+        // swap select -> text input
+        const input = makeAndWireInput('');
+        select.replaceWith(input);
+        input.focus();
+      } else {
+        socket.emit('set-song', { sessionId, slot, value: chosen, username });
+      }
     });
 
     card.appendChild(select);
   }
 }
+
 
 
           grid.appendChild(card);
