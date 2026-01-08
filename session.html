@@ -403,73 +403,112 @@
           card.appendChild(value);
 
           // only my board gets the select
-   if (isMyBoard) {
-  const useCustomInitially = Boolean(currentVal && !SONG_LIBRARY.includes(currentVal));
+   // only my board gets the picker
+if (isMyBoard) {
+  const controlWrap = document.createElement('div');
+  controlWrap.style.display = 'flex';
+  controlWrap.style.flexDirection = 'column';
+  controlWrap.style.gap = '.4rem';
 
-  const makeAndWireInput = (prefill = '') => {
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.className = 'inline-input';
-    input.placeholder = 'Type a song…';
-    input.value = prefill;
+  // determine if currentVal is one of the library items
+  const isCustom = !!currentVal && !SONG_LIBRARY.includes(currentVal);
 
-    const save = () => {
-      const val = input.value.trim();
-      if (!val) return; // don’t save empty
-      socket.emit('set-song', { sessionId, slot, value: val, username });
-    };
-    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
-    input.addEventListener('blur', save);
+  // SELECT (with a "Type your own" sentinel)
+  const select = document.createElement('select');
 
-    return input;
-  };
+  const optCustom = document.createElement('option');
+  optCustom.value = '__CUSTOM__';
+  optCustom.textContent = '— Type your own —';
+  select.appendChild(optCustom);
 
-  if (useCustomInitially || slot === 'Cover') {
-    // start with a text box if value isn’t in the library or it’s the Cover slot
-    card.appendChild(makeAndWireInput(currentVal || ''));
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = 'Choose song...';
+  placeholder.disabled = true;
+  select.appendChild(placeholder);
+
+  SONG_LIBRARY.forEach(song => {
+    const opt = document.createElement('option');
+    opt.value = song;
+    opt.textContent = song;
+    select.appendChild(opt);
+  });
+
+  // preselect appropriately
+  if (isCustom) {
+    select.value = '__CUSTOM__';
+  } else if (currentVal) {
+    select.value = currentVal;
   } else {
-    const select = document.createElement('select');
-
-    // placeholder
-    const placeholder = document.createElement('option');
-    placeholder.value = '';
-    placeholder.disabled = true;
-    placeholder.textContent = 'Choose song…';
-    if (!currentVal) placeholder.selected = true;
-    select.appendChild(placeholder);
-
-    // “Type your own…” option
-    const customOpt = document.createElement('option');
-    customOpt.value = '__CUSTOM__';
-    customOpt.textContent = '— Type your own… —';
-    select.appendChild(customOpt);
-
-    // library options
-    SONG_LIBRARY.forEach(song => {
-      const opt = document.createElement('option');
-      opt.value = song;
-      opt.textContent = song;
-      if (currentVal && currentVal === song) opt.selected = true;
-      select.appendChild(opt);
-    });
-
-    select.addEventListener('change', () => {
-      const chosen = select.value;
-      if (!chosen) return;
-
-      if (chosen === '__CUSTOM__') {
-        // swap select -> text input
-        const input = makeAndWireInput('');
-        select.replaceWith(input);
-        input.focus();
-      } else {
-        socket.emit('set-song', { sessionId, slot, value: chosen, username });
-      }
-    });
-
-    card.appendChild(select);
+    select.value = '';
   }
+
+  // TEXT INPUT (hidden unless "__CUSTOM__" is chosen)
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = 'Type a song...';
+  input.value = isCustom ? currentVal : '';
+  // dark styling to match your theme
+  input.style.background = 'rgba(2,6,23,0.9)';
+  input.style.border = '1px solid rgba(148,163,184,0.45)';
+  input.style.borderRadius = '.45rem';
+  input.style.padding = '.35rem .4rem';
+  input.style.color = '#e2e8f0';
+  input.style.display = (select.value === '__CUSTOM__') ? 'block' : 'none';
+
+  // optional mini button to quickly hide the input and go back to the dropdown
+  const backBtn = document.createElement('button');
+  backBtn.textContent = 'Use dropdown';
+  backBtn.style.background = 'rgba(148,163,184,0.05)';
+  backBtn.style.border = '1px solid rgba(148,163,184,0.25)';
+  backBtn.style.padding = '2px 6px';
+  backBtn.style.fontSize = '.75rem';
+  backBtn.style.width = 'fit-content';
+  backBtn.style.display = (select.value === '__CUSTOM__') ? 'inline-block' : 'none';
+
+  // when selection changes
+  select.addEventListener('change', () => {
+    if (select.value === '__CUSTOM__') {
+      input.style.display = 'block';
+      backBtn.style.display = 'inline-block';
+      input.focus();
+    } else if (select.value) {
+      input.style.display = 'none';
+      backBtn.style.display = 'none';
+      // save immediately
+      socket.emit('set-song', {
+        sessionId,
+        slot,
+        value: select.value,
+        username
+      });
+    }
+  });
+
+  // saving the custom text (on Enter or blur)
+  const saveCustom = () => {
+    const val = input.value.trim();
+    if (!val) return;
+    socket.emit('set-song', { sessionId, slot, value: val, username });
+  };
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') saveCustom(); });
+  input.addEventListener('blur', saveCustom);
+
+  // go back to dropdown UX
+  backBtn.addEventListener('click', () => {
+    input.style.display = 'none';
+    backBtn.style.display = 'none';
+    // keep choice open—user can pick a dropdown option next
+    select.value = '';
+    select.focus();
+  });
+
+  controlWrap.appendChild(select);
+  controlWrap.appendChild(input);
+  controlWrap.appendChild(backBtn);
+  card.appendChild(controlWrap);
 }
+
 
 
 
