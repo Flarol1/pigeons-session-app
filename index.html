@@ -23,17 +23,18 @@
       display:flex; align-items:center; justify-content:space-between;
       padding:12px 16px; border-bottom:1px solid rgba(148,163,184,.12);
       background: rgba(2,6,23,.18); backdrop-filter: blur(6px);
+      gap:10px;
     }
-    header h1{ margin:0; font-size:1rem; letter-spacing:.02em }
+    header h1{ margin:0; font-size:1rem; letter-spacing:.02em; white-space:nowrap }
     #search{
       background: rgba(2,6,23,.6); border:1px solid var(--border);
-      color:var(--text); border-radius:.6rem; padding:.45rem .6rem; width:280px;
+      color:var(--text); border-radius:.6rem; padding:.45rem .6rem; width:280px; max-width:50vw;
       outline:none;
     }
     #search:focus{ border-color: rgba(34,197,94,.6); box-shadow:0 0 0 2px rgba(34,197,94,.12) }
 
     .layout{
-      display:grid; grid-template-columns: 280px 1fr; gap:14px;
+      display:grid; grid-template-columns: 300px 1fr; gap:14px;
       width:min(1200px, 100%); margin:14px auto; padding:0 12px;
     }
     aside{
@@ -45,31 +46,53 @@
     }
     h2{
       margin:0 0 8px; font-size:.9rem; color:var(--muted); text-transform:uppercase; letter-spacing:.08em;
+      display:flex; align-items:center; gap:8px;
     }
+    .subtle{
+      color:var(--muted); font-size:.8rem; font-weight:500;
+    }
+    select, button.small{
+      background: rgba(2,6,23,.6); border:1px solid var(--border);
+      color:var(--text); border-radius:.5rem; padding:.35rem .5rem; font-size:.8rem; outline:none; cursor:pointer;
+    }
+    select:focus, button.small:focus{ border-color: rgba(34,197,94,.6); box-shadow:0 0 0 2px rgba(34,197,94,.12) }
 
-    .list{
-      display:flex; flex-direction:column; gap:6px;
-    }
+    .list{ display:flex; flex-direction:column; gap:6px; }
     .item{
       background: var(--card); border:1px solid rgba(148,163,184,.12);
       border-radius:10px; padding:10px; cursor:pointer;
       display:flex; flex-direction:column; gap:4px;
     }
-    .item:hover{ border-color: rgba(34,197,94,.5) }
+    .item:hover{ border-color: rgba(34,197,94,.45) }
     .date{ font-size:.75rem; color:var(--muted) }
     .title{ font-weight:600; font-size:.9rem }
 
-    .grid{
-      display:grid; grid-template-columns: repeat(auto-fill, minmax(260px,1fr)); gap:10px;
-    }
+    .grid{ display:grid; grid-template-columns: repeat(auto-fill, minmax(260px,1fr)); gap:10px; }
+    .empty{ padding:10px; color:var(--muted); font-size:.9rem; }
 
-    .empty{
-      padding:10px; color:var(--muted); font-size:.9rem;
+    details.year{
+      background: rgba(15,23,42,.35); border:1px solid rgba(148,163,184,.12);
+      border-radius:10px; padding:8px 10px;
+    }
+    details.year + details.year{ margin-top:8px; }
+    details.year summary{
+      list-style:none; cursor:pointer; user-select:none; display:flex; align-items:center; justify-content:space-between;
+      gap:8px; padding:2px; font-weight:600;
+    }
+    details.year summary::-webkit-details-marker { display:none; }
+    .year-title{ display:flex; align-items:center; gap:8px; }
+    .badge{
+      font-size:.7rem; color:var(--muted); padding:2px 6px; border:1px solid var(--border); border-radius:999px;
+    }
+    .year-body{ margin-top:8px; display:flex; flex-direction:column; gap:6px; }
+    .load-more{
+      margin-top:6px; display:flex; justify-content:center;
     }
 
     @media (max-width: 860px){
       .layout{ grid-template-columns: 1fr; }
       aside{ position:static; height:auto }
+      #search{ max-width:60vw; }
     }
   </style>
 </head>
@@ -81,8 +104,19 @@
 
   <div class="layout">
     <aside>
-      <h2>Past shows</h2>
-      <div id="pastList" class="list"></div>
+      <h2>
+        Past shows
+        <span class="subtle">•</span>
+        <label class="subtle" for="yearClamp">Last</label>
+        <select id="yearClamp">
+          <option value="1">1 yr</option>
+          <option value="2" selected>2 yrs</option>
+          <option value="3">3 yrs</option>
+          <option value="4">4 yrs</option>
+          <option value="all">All</option>
+        </select>
+      </h2>
+      <div id="pastContainer"></div>
     </aside>
 
     <main class="panel">
@@ -93,12 +127,21 @@
   </div>
 
   <script>
-    const pastList = document.getElementById('pastList');
+    // -------- helpers ----------
+    const YEAR_PAGE_SIZE = 15; // items shown per year initially (click 'Show more' to add +15)
+    const pastContainer = document.getElementById('pastContainer');
     const upcomingGrid = document.getElementById('upcomingGrid');
     const upcomingEmpty = document.getElementById('upcomingEmpty');
     const search = document.getElementById('search');
+    const yearClampSel = document.getElementById('yearClamp');
 
-    // parse "YYYY-MM-DD" from id like "2026-01-23-baltimore-md-soundstage-1"
+    // sensible defaults: 2 years on mobile, 4 years on desktop
+    if (window.matchMedia('(min-width: 861px)').matches) {
+      yearClampSel.value = '4';
+    } else {
+      yearClampSel.value = '2';
+    }
+
     function parseDateFromId(id){
       const d = id.slice(0,10);
       if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
@@ -108,9 +151,8 @@
       return null;
     }
     function fmt(dt){
-      try{
-        return dt.toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'});
-      }catch{ return String(dt).slice(0,10); }
+      try{ return dt.toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'}); }
+      catch{ return String(dt).slice(0,10); }
     }
     function matchesFilter(item, q){
       if(!q) return true;
@@ -132,44 +174,135 @@
       return div;
     }
 
+    // -------- state ----------
     let all = [];
+    let shownByYear = {};   // { '2026': 15, '2025': 30, ... }
+
+    function groupByYear(items){
+      const map = new Map(); // year -> [items]
+      for (const s of items){
+        const dt = parseDateFromId(s.id);
+        const year = dt ? String(dt.getFullYear()) : 'Unknown';
+        if (!map.has(year)) map.set(year, []);
+        map.get(year).push(s);
+      }
+      // sort each year desc by date then title
+      for (const [year, arr] of map){
+        arr.sort((a,b)=>{
+          const ad = parseDateFromId(a.id)?.getTime() ?? 0;
+          const bd = parseDateFromId(b.id)?.getTime() ?? 0;
+          return bd - ad || a.title.localeCompare(b.title);
+        });
+      }
+      return map;
+    }
+
     function render(){
       const q = search.value.trim();
+      const today = new Date(); today.setHours(0,0,0,0);
 
-      // split by date
-      const today = new Date();
-      today.setHours(0,0,0,0);
+      const filtered = all.filter(s => matchesFilter(s, q));
 
+      // split
       const upcoming = [];
       const past = [];
-
-      for (const s of all){
-        if (!matchesFilter(s, q)) continue;
+      for (const s of filtered){
         const dt = parseDateFromId(s.id);
-        if (dt && dt >= today) upcoming.push(s);
-        else past.push(s);
+        if (dt && dt >= today) upcoming.push(s); else past.push(s);
       }
 
-      // sort: upcoming asc by date, then title; past desc by date
-      const safeDate = (s) => parseDateFromId(s.id)?.getTime() ?? 0;
-      upcoming.sort((a,b)=> safeDate(a)-safeDate(b) || a.title.localeCompare(b.title));
-      past.sort((a,b)=> safeDate(b)-safeDate(a) || a.title.localeCompare(b.title));
-
-      // draw
+      // render upcoming
+      upcoming.sort((a,b)=>{
+        const ad = parseDateFromId(a.id)?.getTime() ?? 0;
+        const bd = parseDateFromId(b.id)?.getTime() ?? 0;
+        return ad - bd || a.title.localeCompare(b.title);
+      });
       upcomingGrid.innerHTML = '';
-      pastList.innerHTML = '';
-
       for (const s of upcoming) upcomingGrid.appendChild(itemEl(s));
-      for (const s of past) pastList.appendChild(itemEl(s));
-
       upcomingEmpty.style.display = upcoming.length ? 'none' : 'block';
+
+      // render past (grouped by year + clamp + pagination)
+      const byYear = groupByYear(past);
+      // sort years desc, Unknown at end
+      const years = Array.from(byYear.keys())
+        .filter(y => y !== 'Unknown')
+        .sort((a,b)=> Number(b)-Number(a));
+      if (byYear.has('Unknown')) years.push('Unknown');
+
+      // apply year clamp unless “All”
+      const clampVal = yearClampSel.value;
+      const clampedYears = (clampVal === 'all' || q) ? years : years.slice(0, Number(clampVal));
+
+      pastContainer.innerHTML = '';
+      shownByYear = shownByYear || {};
+
+      for (const year of clampedYears){
+        const items = byYear.get(year) || [];
+        if (!shownByYear[year]) shownByYear[year] = YEAR_PAGE_SIZE; // default page size
+        const showN = Math.min(shownByYear[year], items.length);
+
+        // details group
+        const details = document.createElement('details');
+        details.className = 'year';
+        // expand the most recent year by default (and also expand if searching)
+        if (q || year === clampedYears[0]) details.open = true;
+
+        const summary = document.createElement('summary');
+        const left = document.createElement('div');
+        left.className = 'year-title';
+        const spanYear = document.createElement('span');
+        spanYear.textContent = year;
+        const spanCount = document.createElement('span');
+        spanCount.className = 'badge';
+        spanCount.textContent = `${items.length}`;
+        left.appendChild(spanYear);
+        left.appendChild(spanCount);
+
+        summary.appendChild(left);
+        details.appendChild(summary);
+
+        const body = document.createElement('div');
+        body.className = 'year-body';
+
+        // render visible items
+        for (let i=0; i<showN; i++){
+          body.appendChild(itemEl(items[i]));
+        }
+
+        // load more if needed
+        if (showN < items.length){
+          const moreWrap = document.createElement('div');
+          moreWrap.className = 'load-more';
+          const btn = document.createElement('button');
+          btn.className = 'small';
+          const remain = items.length - showN;
+          btn.textContent = `Show more… (${remain})`;
+          btn.addEventListener('click', () => {
+            shownByYear[year] += YEAR_PAGE_SIZE;
+            render(); // re-render this year (fast enough for our scale)
+          });
+          moreWrap.appendChild(btn);
+          body.appendChild(moreWrap);
+        }
+
+        details.appendChild(body);
+        pastContainer.appendChild(details);
+      }
+
+      // If clamp hides some years (and not searching), show a small hint
+      if (!q && clampVal !== 'all' && years.length > clampedYears.length){
+        const hint = document.createElement('div');
+        hint.className = 'subtle';
+        hint.style.marginTop = '8px';
+        hint.textContent = `Showing last ${clampVal} ${Number(clampVal)===1?'year':'years'} • use selector to view more`;
+        pastContainer.appendChild(hint);
+      }
     }
 
     async function boot(){
       try{
         const res = await fetch('/sessions');
         const json = await res.json();
-        // Expect: [{id, title}]
         all = Array.isArray(json) ? json : [];
       }catch(e){
         console.error('Failed to load sessions:', e);
@@ -179,6 +312,7 @@
     }
 
     search.addEventListener('input', render);
+    yearClampSel.addEventListener('change', render);
     boot();
   </script>
 </body>
