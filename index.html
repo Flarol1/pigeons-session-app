@@ -94,6 +94,53 @@
       aside{ position:static; height:auto }
       #search{ max-width:60vw; }
     }
+    /* Neon accent for show links */
+:root {
+  --neon-green: #22c55e;
+  --neon-purple: #a855f7;
+}
+
+#upcomingList a,
+#pastList a {
+  position: relative;
+  display: block;                 /* keeps the glow tidy */
+  padding: .55rem .75rem;
+  border-radius: .6rem;
+  color: var(--text);
+  text-decoration: none;
+  border: 1px solid rgba(168, 85, 247, 0.28);       /* subtle purple edge */
+  background: linear-gradient(
+    180deg,
+    rgba(168, 85, 247, 0.08),
+    rgba(34, 197, 94, 0.06)
+  );
+  box-shadow:
+    0 0 6px rgba(168, 85, 247, 0.22),
+    inset 0 0 8px rgba(34, 197, 94, 0.12);
+  transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+}
+
+#upcomingList a:hover,
+#upcomingList a:focus,
+#pastList a:hover,
+#pastList a:focus {
+  border-color: rgba(34, 197, 94, 0.55);           /* greener on hover */
+  box-shadow:
+    0 0 10px rgba(168, 85, 247, 0.35),
+    0 0 18px rgba(34, 197, 94, 0.28),
+    inset 0 0 10px rgba(34, 197, 94, 0.18);
+  transform: translateY(-1px);
+  outline: none;
+}
+
+/* Optional: tiny label glow without heavy box */
+#upcomingList a .title,
+#pastList a .title {
+  text-shadow:
+    0 0 2px rgba(168, 85, 247, 0.35),
+    0 0 4px rgba(34, 197, 94, 0.35);
+}
+
   </style>
 </head>
 <body>
