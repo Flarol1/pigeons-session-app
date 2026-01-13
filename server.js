@@ -16,18 +16,20 @@ let firestore = null;
 function getFirestore() {
   if (DB_DISABLED) return null;
   if (firestore) return firestore;
+const { Firestore } = require('@google-cloud/firestore');
 
-  const { Firestore } = require('@google-cloud/firestore');
+const PROJECT_ID =
+  process.env.FIREBASE_PROJECT_ID ||
+  process.env.GCLOUD_PROJECT ||
+  process.env.GCP_PROJECT;
 
-  const PROJECT_ID =
-    process.env.FIREBASE_PROJECT_ID ||
-    process.env.GCLOUD_PROJECT ||
-    process.env.GCP_PROJECT;
+const DATABASE_ID = process.env.FIRESTORE_DATABASE_ID || '(default)';
 
-  // IMPORTANT:
-  // - This is the Firestore DATABASE ID (often "(default)" OR a custom one like "pppp")
-  // - You said you set FIRESTORE_DATABASE_ID in Cloud Run.
-  const DATABASE_ID = process.env.FIRESTORE_DATABASE_ID || 'pppp';
+const db = new Firestore({
+  projectId: PROJECT_ID,
+  databaseId: DATABASE_ID,
+});
+
 
   if (!PROJECT_ID) {
     throw new Error('Missing project id. Set FIREBASE_PROJECT_ID (or GCLOUD_PROJECT).');
