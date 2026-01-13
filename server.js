@@ -16,6 +16,40 @@ const path = require('path');
 
 const admin = require('firebase-admin');
 
+const { Firestore } = require('@google-cloud/firestore');
+
+// Cloud Run usually provides GOOGLE_CLOUD_PROJECT automatically
+const PROJECT_ID =
+  process.env.FIREBASE_PROJECT_ID ||
+  process.env.GOOGLE_CLOUD_PROJECT ||
+  process.env.GCLOUD_PROJECT ||
+  process.env.GCP_PROJECT;
+
+// Firestore default database id is literally "(default)"
+const DATABASE_ID = process.env.FIRESTORE_DATABASE_ID || '(default)';
+
+if (!PROJECT_ID) {
+  throw new Error(
+    'Missing PROJECT_ID. Set FIREBASE_PROJECT_ID or rely on GOOGLE_CLOUD_PROJECT in Cloud Run.'
+  );
+}
+
+const db = new Firestore({
+  projectId: PROJECT_ID,
+  databaseId: DATABASE_ID,
+});
+
+app.get('/songs', async (req, res) => {
+  try {
+    const snap = await db.collection('songs').orderBy('name').get();
+    const songs = snap.docs.map(d => d.get('name')).filter(Boolean);
+    res.json({ songs, count: songs.length });
+  } catch (e) {
+    console.error('[GET /songs]', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ───────────────── Firestore mode detection ─────────────────
 const FIRESTORE_DISABLED =
   String(process.env.DISABLE_FIRESTORE || '').trim() === '1' ||
@@ -34,6 +68,68 @@ if (!FIRESTORE_DISABLED) {
 } else {
   console.log('[BOOT] Firestore disabled → using in-memory');
 }
+
+// --- Admin gate (simple allow-list) ---
+const ADMIN_NAMES = (process.env.ADMIN_NAMES || 'zaq,zack')
+  .split(',')
+  .map(s => s.trim().toLowerCase())
+  .filter(Boolean);
+
+function requireAdminName(req, res, next) {
+  const name = String(req.header('x-admin-name') || '').trim().toLowerCase();
+  if (!name) return res.status(401).json({ error: 'Missing admin name' });
+  if (!ADMIN_NAMES.includes(name)) return res.status(403).json({ error: 'Forbidden' });
+  next();
+}
+// Read songs (public)
+app.get('/songs', async (req, res) => {
+  try {
+    const snap = await db.collection('songs').orderBy('name').get();
+    res.json({ songs: snap.docs.map(d => d.data().name) });
+  } catch (e) {
+    console.error('[GET /songs]', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Add song (admin only)
+app.post('/songs', requireAdminName, async (req, res) => {
+  const name = String(req.body?.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'Missing name' });
+  if (name.length > 120) return res.status(400).json({ error: 'Name too long' });
+
+  try {
+    // Use normalized id to avoid duplicates
+    const id = name.toLowerCase().replace(/\s+/g, ' ').trim();
+    await db.collection('songs').doc(id).set(
+      { name, created_at: new Date().toISOString() },
+      { merge: true }
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[POST /songs]', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Delete song (admin only)
+app.delete('/songs', requireAdminName, async (req, res) => {
+  const name = String(req.query?.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'Missing name' });
+
+  try {
+    const id = name.toLowerCase().replace(/\s+/g, ' ').trim();
+    await db.collection('songs').doc(id).delete();
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[DELETE /songs]', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
+
+
 
 // ───────────────── Data layer ─────────────────
 const SONG_SLOTS = [

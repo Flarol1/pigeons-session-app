@@ -50,6 +50,13 @@
     }
     nav a:hover { opacity: 1; }
 
+    /* Right controls in nav */
+    .nav-right {
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+    }
+
     /* Neon badge for the session header */
     #sessionNameBox {
       width: min(1100px, 100%);
@@ -212,14 +219,97 @@
       color: rgba(226, 232, 240, .6);
       font-size: .8rem;
     }
-    #nameInput {
-      width: 100%;
-      margin-bottom: .8rem;
-    }
+    #nameInput { width: 100%; margin-bottom: .8rem; }
     #nameSubmit {
       width: 100%;
       background: rgba(34, 197, 94, 0.25);
       border: 1px solid rgba(34, 197, 94, 0.4);
+    }
+
+    /* --- Songs overlay --- */
+    #songsOverlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(2, 6, 23, 0.72);
+      backdrop-filter: blur(6px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 80;
+    }
+    .songs-modal {
+      width: min(820px, 92vw);
+      max-height: 80vh;
+      overflow: auto;
+      background: rgba(15, 23, 42, 0.92);
+      border: 1px solid rgba(148, 163, 184, 0.35);
+      border-radius: 1rem;
+      padding: 1rem;
+      box-shadow: 0 20px 45px rgba(0,0,0,.25);
+    }
+    .songs-top {
+      display: flex;
+      gap: .6rem;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: .8rem;
+    }
+    .songs-top-title {
+      font-weight: 700;
+    }
+    .songs-controls {
+      display: flex;
+      gap: .5rem;
+      align-items: center;
+    }
+    .songs-subrow {
+      display: flex;
+      gap: .6rem;
+      flex-wrap: wrap;
+      margin-bottom: .8rem;
+      align-items: center;
+    }
+    .songs-badge {
+      font-size: .8rem;
+      opacity: .75;
+    }
+    .songs-edit-panel {
+      display: none;
+      border: 1px solid rgba(34,197,94,0.25);
+      border-radius: .8rem;
+      padding: .8rem;
+      margin-bottom: 1rem;
+    }
+    .songs-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: .5rem;
+    }
+    .song-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: .5rem;
+      padding: .5rem .6rem;
+      background: rgba(15, 23, 42, 0.45);
+      border: 1px solid rgba(148, 163, 184, 0.10);
+      border-radius: .6rem;
+    }
+    .song-name {
+      font-size: .85rem;
+      font-weight: 600;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 340px;
+    }
+    .btn-danger {
+      background: rgba(239,68,68,0.12);
+      border: 1px solid rgba(239,68,68,0.45);
+    }
+    .btn-muted {
+      background: rgba(148, 163, 184, 0.05);
+      border: 1px solid rgba(148, 163, 184, 0.25);
     }
 
     @media (max-width: 600px) {
@@ -235,7 +325,11 @@
 <body>
   <nav>
     <div>Pigeons Tour Dates - Make Your Picks!</div>
-    <a href="/">Back to dates</a>
+
+    <div class="nav-right">
+      <button id="songListBtn" class="btn-muted" title="View / edit song list">Song List</button>
+      <a href="/">Back to dates</a>
+    </div>
   </nav>
 
   <!-- dark name modal -->
@@ -245,6 +339,37 @@
       <p>Enter the name you want to show on this session.</p>
       <input class="inline-input" type="text" id="nameInput" placeholder="Andy, Zaq, etc." />
       <button id="nameSubmit">Enter</button>
+    </div>
+  </div>
+
+  <!-- Songs modal -->
+  <div id="songsOverlay">
+    <div class="songs-modal">
+      <div class="songs-top">
+        <div class="songs-top-title">Song List</div>
+        <div class="songs-controls">
+          <button id="songsEditBtn">Edit</button>
+          <button id="songsCloseBtn" class="btn-muted">Close</button>
+        </div>
+      </div>
+
+      <div class="songs-subrow">
+        <input id="songsSearch" class="inline-input" placeholder="Search songs..." style="flex:1; min-width:220px;" />
+        <div id="songsAdminBadge" class="songs-badge">View only</div>
+      </div>
+
+      <div id="songsEditPanel" class="songs-edit-panel">
+        <div style="display:flex; gap:.5rem; flex-wrap:wrap;">
+          <input id="songsAddInput" class="inline-input" placeholder="Add new song..." style="flex:1; min-width:220px;" />
+          <button id="songsAddBtn">Add</button>
+          <button id="songsLogoutBtn" class="btn-muted">Log out edit</button>
+        </div>
+        <div style="font-size:.75rem; opacity:.65; margin-top:.4rem;">
+          Edit access: enter <b>Zaq</b> or <b>Zack</b>.
+        </div>
+      </div>
+
+      <div id="songsList" class="songs-list"></div>
     </div>
   </div>
 
@@ -307,6 +432,143 @@
       box.innerHTML = `<span class="session-title">${text}</span>`;
     }
 
+    // -------- Song list admin gate (front-end) --------
+    let adminName = localStorage.getItem('songs-admin-name') || '';
+
+    function isAdmin() {
+      const n = (adminName || '').trim().toLowerCase();
+      return n === 'zaq' || n === 'zack';
+    }
+
+    function setAdminUI() {
+      const badge = document.getElementById('songsAdminBadge');
+      const editPanel = document.getElementById('songsEditPanel');
+      if (isAdmin()) {
+        badge.textContent = `Edit enabled as: ${adminName}`;
+        editPanel.style.display = 'block';
+      } else {
+        badge.textContent = 'View only';
+        editPanel.style.display = 'none';
+      }
+    }
+
+    function renderSongsList(filterText='') {
+      const list = document.getElementById('songsList');
+      list.innerHTML = '';
+
+      const f = (filterText || '').trim().toLowerCase();
+      const songs = !f ? SONG_LIBRARY : SONG_LIBRARY.filter(s => String(s).toLowerCase().includes(f));
+
+      songs.forEach(name => {
+        const row = document.createElement('div');
+        row.className = 'song-row';
+
+        const label = document.createElement('div');
+        label.className = 'song-name';
+        label.textContent = name;
+
+        row.appendChild(label);
+
+        if (isAdmin()) {
+          const del = document.createElement('button');
+          del.textContent = 'Delete';
+          del.className = 'btn-danger';
+          del.onclick = async () => {
+            if (!confirm(`Delete "${name}"?`)) return;
+            const resp = await fetch(`/songs?name=${encodeURIComponent(name)}`, {
+              method: 'DELETE',
+              headers: { 'x-admin-name': adminName }
+            });
+            if (!resp.ok) {
+              const err = await resp.json().catch(()=>({}));
+              alert(err.error || 'Delete failed');
+              return;
+            }
+            await loadSongs();
+            renderSongsList(document.getElementById('songsSearch').value);
+          };
+          row.appendChild(del);
+        }
+
+        list.appendChild(row);
+      });
+
+      if (songs.length === 0) {
+        const empty = document.createElement('div');
+        empty.style.opacity = '.7';
+        empty.style.fontSize = '.85rem';
+        empty.textContent = 'No matches.';
+        list.appendChild(empty);
+      }
+    }
+
+    // Open/close songs overlay
+    document.getElementById('songListBtn').addEventListener('click', async () => {
+      document.getElementById('songsOverlay').style.display = 'flex';
+      await loadSongs();
+      setAdminUI();
+      renderSongsList('');
+      document.getElementById('songsSearch').value = '';
+      document.getElementById('songsSearch').focus();
+    });
+
+    document.getElementById('songsCloseBtn').addEventListener('click', () => {
+      document.getElementById('songsOverlay').style.display = 'none';
+    });
+
+    // Search within overlay
+    document.getElementById('songsSearch').addEventListener('input', (e) => {
+      renderSongsList(e.target.value);
+    });
+
+    // Edit gate prompt
+    document.getElementById('songsEditBtn').addEventListener('click', () => {
+      const val = prompt('Enter edit password (Zaq or Zack):', '') || '';
+      const cleaned = val.trim();
+      if (!cleaned) return;
+
+      adminName = cleaned;
+      localStorage.setItem('songs-admin-name', adminName);
+
+      setAdminUI();
+      renderSongsList(document.getElementById('songsSearch').value);
+    });
+
+    // Add song
+    document.getElementById('songsAddBtn').addEventListener('click', async () => {
+      const input = document.getElementById('songsAddInput');
+      const name = (input.value || '').trim();
+      if (!name) return;
+
+      const resp = await fetch('/songs', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-name': adminName
+        },
+        body: JSON.stringify({ name })
+      });
+
+      if (!resp.ok) {
+        const err = await resp.json().catch(()=>({}));
+        alert(err.error || 'Add failed');
+        return;
+      }
+
+      input.value = '';
+      await loadSongs();
+      renderSongsList(document.getElementById('songsSearch').value);
+    });
+
+    // Logout edit
+    document.getElementById('songsLogoutBtn').addEventListener('click', () => {
+      adminName = '';
+      localStorage.removeItem('songs-admin-name');
+      setAdminUI();
+      renderSongsList(document.getElementById('songsSearch').value);
+    });
+
+    // -------- Login + socket join --------
     async function finishLogin(name) {
       username = name.trim();
       if (!username) return;
@@ -316,13 +578,12 @@
 
       document.getElementById('nameOverlay').style.display = 'none';
 
-      // ✅ ensure songs are loaded before rendering any dropdowns
+      // ensure songs loaded before first render
       await loadSongs();
 
       socket.emit('join', { sessionId, username });
     }
 
-    // If we already had username, skip modal
     if (username) {
       setSessionHeader(`Session: ${sessionId} • you are ${username}`);
       document.getElementById('nameOverlay').style.display = 'none';
@@ -355,7 +616,6 @@
         const board = document.createElement('div');
         board.className = 'user-board';
 
-        // header
         const header = document.createElement('div');
         header.className = 'user-board-header';
 
@@ -365,7 +625,6 @@
 
         board.appendChild(header);
 
-        // grid
         const grid = document.createElement('div');
         grid.className = 'slot-grid';
 
@@ -387,7 +646,6 @@
           value.textContent = currentVal ? currentVal : '—';
           card.appendChild(value);
 
-          // only my board gets the picker
           if (isMyBoard) {
             const controlWrap = document.createElement('div');
             controlWrap.style.display = 'flex';
@@ -398,7 +656,6 @@
 
             const select = document.createElement('select');
 
-            // if songs aren't loaded, show a single disabled option
             if (SONG_LIBRARY.length === 0) {
               const opt = document.createElement('option');
               opt.value = '';
@@ -407,7 +664,6 @@
               opt.selected = true;
               select.appendChild(opt);
             } else {
-              // custom sentinel
               const optCustom = document.createElement('option');
               optCustom.value = '__CUSTOM__';
               optCustom.textContent = '— Type your own —';
@@ -444,8 +700,7 @@
 
             const backBtn = document.createElement('button');
             backBtn.textContent = 'Use dropdown';
-            backBtn.style.background = 'rgba(148,163,184,0.05)';
-            backBtn.style.border = '1px solid rgba(148,163,184,0.25)';
+            backBtn.className = 'btn-muted';
             backBtn.style.padding = '2px 6px';
             backBtn.style.fontSize = '.75rem';
             backBtn.style.width = 'fit-content';
@@ -507,9 +762,8 @@
 
     document.getElementById('refreshSongsBtn').addEventListener('click', async () => {
       await loadSongs();
-      // Re-render using last known session state (best effort)
-      // If you want it perfect, server could emit state on request — but this is fine.
       console.log('[songs] refreshed');
+      alert(`Refreshed songs: ${SONG_LIBRARY.length}`);
     });
 
     socket.on('error', (msg) => {
