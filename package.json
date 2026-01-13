@@ -6,16 +6,13 @@
   "type": "commonjs",
   "scripts": {
     "start": "node server.js",
-    "start:local": "PGHOST=localhost PGPORT=5432 node server.js"
+    "start:local": "FIREBASE_PROJECT_ID=your-project-id node server.js"
   },
   "dependencies": {
+    "dotenv": "^16.4.5",
     "express": "^4.21.2",
-    "pg": "^8.12.0",
-    "socket.io": "^4.7.5",
-    "dotenv": "^16.4.5"
-  },
-  "optionalDependencies": {
-    "sqlite3": "^5.1.7"
+    "firebase-admin": "^12.7.0",
+    "socket.io": "^4.7.5"
   },
   "engines": {
     "node": ">=18"

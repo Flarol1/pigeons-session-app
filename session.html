@@ -16,9 +16,7 @@
       --accent: #22c55e;
       --danger: #ef4444;
     }
-    * {
-      box-sizing: border-box;
-    }
+    * { box-sizing: border-box; }
     body {
       font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background: var(--page-bg);
@@ -31,7 +29,6 @@
       gap: 1rem;
       padding: 1.2rem;
     }
-    /* top nav */
     nav {
       width: min(1100px, 100%);
       display: flex;
@@ -50,19 +47,27 @@
       font-size: .8rem;
       opacity: .8;
     }
-    nav a:hover {
-      opacity: 1;
-    }
+    nav a:hover { opacity: 1; }
+
+    /* Neon badge for the session header */
     #sessionNameBox {
       width: min(1100px, 100%);
-      background: linear-gradient(120deg, rgba(34, 197, 94, 0.35), rgba(15, 23, 42, 0.3));
-      border: 1px solid rgba(34, 197, 94, 0.3);
+      border: 1px solid rgba(168, 85, 247, 0.35);
+      background: linear-gradient(120deg, rgba(34, 197, 94, 0.20), rgba(15, 23, 42, 0.28));
       border-radius: 1rem;
       padding: 0.9rem 1.1rem;
       font-weight: 600;
       text-align: center;
-      box-shadow: 0 12px 20px rgba(0, 0, 0, .15);
+      box-shadow:
+        0 0 10px rgba(168, 85, 247, 0.25),
+        inset 0 0 12px rgba(34, 197, 94, 0.20);
     }
+    #sessionNameBox .session-title {
+      text-shadow:
+        0 0 2px rgba(168, 85, 247, 0.35),
+        0 0 5px rgba(34, 197, 94, 0.28);
+    }
+
     #values {
       width: min(1100px, 100%);
       background: rgba(2, 6, 23, 0.2);
@@ -78,7 +83,9 @@
       flex-wrap: wrap;
       margin-bottom: 1rem;
       justify-content: space-between;
+      align-items: center;
     }
+
     button {
       background: rgba(34, 197, 94, 0.12);
       border: 1px solid rgba(34, 197, 94, 0.35);
@@ -88,13 +95,12 @@
       font-weight: 500;
       cursor: pointer;
     }
-    button:hover {
-      background: rgba(34, 197, 94, 0.25);
-    }
+    button:hover { background: rgba(34, 197, 94, 0.25); }
     #clearButton {
       background: rgba(148, 163, 184, 0.05);
       border: 1px solid rgba(148, 163, 184, 0.16);
     }
+
     #wordsList {
       display: flex;
       flex-direction: column;
@@ -149,7 +155,7 @@
       font-weight: 600;
       font-size: .9rem;
     }
-    /* dark select */
+
     select {
       background: rgba(2, 6, 23, 0.9);
       border: 1px solid rgba(148, 163, 184, 0.45);
@@ -163,10 +169,8 @@
       border-color: rgba(34, 197, 94, 0.7);
       box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.12);
     }
-    select option {
-      background: #0f172a;
-      color: #e2e8f0;
-    }
+    select option { background: #0f172a; color: #e2e8f0; }
+
     /* name overlay */
     #nameOverlay {
       position: fixed;
@@ -187,9 +191,7 @@
       text-align: center;
       box-shadow: 0 20px 45px rgba(0,0,0,.25);
     }
-    .name-modal h2 {
-      margin: 0 0 .5rem;
-    }
+    .name-modal h2 { margin: 0 0 .5rem; }
     .name-modal p {
       margin: 0 0 .9rem;
       color: rgba(226, 232, 240, .6);
@@ -214,49 +216,26 @@
       background: rgba(34, 197, 94, 0.25);
       border: 1px solid rgba(34, 197, 94, 0.4);
     }
-    @media (max-width: 600px) {
-      nav {
-        flex-wrap: wrap;
-        justify-content: center;
-      }
-      body {
-        padding: .7rem;
-      }
-      /* add near your other input/select styles */
-.inline-input {
-  background: rgba(2,6,23,0.9);
-  border: 1px solid rgba(148,163,184,0.45);
-  border-radius: .45rem;
-  padding: .35rem .4rem;
-  color: #e2e8f0;
-  font-size: .8rem;
-  outline: none;
-}
-.inline-input:focus {
-  border-color: rgba(34,197,94,0.7);
-  box-shadow: 0 0 0 2px rgba(34,197,94,0.12);
-}
+
+    /* inline input matches theme */
+    .inline-input {
+      background: rgba(2,6,23,0.9);
+      border: 1px solid rgba(148,163,184,0.45);
+      border-radius: .45rem;
+      padding: .35rem .4rem;
+      color: #e2e8f0;
+      font-size: .8rem;
+      outline: none;
     }
-    /* Neon badge for the session header */
-#sessionNameBox {
-  border: 1px solid rgba(168, 85, 247, 0.35);
-  background: linear-gradient(
-    120deg,
-    rgba(34, 197, 94, 0.20),
-    rgba(15, 23, 42, 0.28)
-  );
-  box-shadow:
-    0 0 10px rgba(168, 85, 247, 0.25),
-    inset 0 0 12px rgba(34, 197, 94, 0.20);
-}
+    .inline-input:focus {
+      border-color: rgba(34,197,94,0.7);
+      box-shadow: 0 0 0 2px rgba(34,197,94,0.12);
+    }
 
-/* Optional: a tiny glow for the actual title text inside */
-#sessionNameBox .session-title {
-  text-shadow:
-    0 0 2px rgba(168, 85, 247, 0.35),
-    0 0 5px rgba(34, 197, 94, 0.28);
-}
-
+    @media (max-width: 600px) {
+      nav { flex-wrap: wrap; justify-content: center; }
+      body { padding: .7rem; }
+    }
   </style>
 </head>
 <body>
@@ -275,14 +254,14 @@
     </div>
   </div>
 
-<div id="sessionNameBox">
-  <span class="session-title">Loading session…</span>
-</div>
+  <div id="sessionNameBox">
+    <span class="session-title">Loading session…</span>
+  </div>
 
   <div id="values">
     <div id="controlRow">
-      <div style="font-size:.7rem; opacity:.6;">
-        Pick songs from the dropdowns — it saves automatically.
+      <div id="helperText" style="font-size:.7rem; opacity:.6;">
+        Loading songs…
       </div>
       <button id="clearButton">Clear All</button>
     </div>
@@ -290,12 +269,9 @@
   </div>
 
   <script>
-    const sessionId = decodeURIComponent(
-      window.location.pathname.split('/').pop().trim()
-    );
+    const sessionId = decodeURIComponent(window.location.pathname.split('/').pop().trim());
     const socket = io();
 
-    // we'll set this after modal
     let username = localStorage.getItem('setlist-username');
 
     const SONG_SLOTS = [
@@ -310,43 +286,50 @@
       "Bustout"
     ];
 
-    const SONG_LIBRARY = [
-  "Stay", "Funk E Zekial", "Landing", "French Cafe", "Overtired", "Totally", "On the Rise", "Couldn't We All",
-  "F.U.", "Melting Lights", "Julia", "Schwanthem", "Zydeko", "Time To Ride", "Sunny Day", "Moonwalk", "Horizon",
-  "Lightning", "White Night", "Live Life", "Upfunk", "Live It Up", "Walk Outside", "Burning Up My Time",
-  "Condenser", "Fade Fast", "Pop Off", "Bad For You", "Whoopie", "Kiwi", "Interzood", "Penguins", "Fun in Funk",
-  "Somethin' for Ya", "Ocean Flows", "The Liquid", "Porcupine", "Henrietta", "Too Long", "Doc", "Fox and Toad",
-  "Offshoot", "Posideon", "King Kong", "Dawn a New Day", "High as Five", "Sail On", "Avalanche", "Fortress",
-  "Yo Soy Fiesta", "Overrun", "Havana", "Snake Eyes", "Skipjack", "Elephante", "Move Like That", "Lost in Line",
-  "Sir Real", "Water", "Lowdown", "Su Casa", "Distant Times", "Paperboy", "Whirled", "Beanstalk", "Indiglo",
-  "The Town", "Alright Tonight", "Day In Time", "My Own Way", "Fall In Place", "Skinner", "Beneath The Surface",
-  "Let The Boogie Out", "Overtime", "Sorcerer", "Feelin' Fine", "Yesterday In Time", "Calm Before the Storm",
-  "Underworld", "Right Track", "Hell Yeah", "In the Bubble", "Feed The Fire", "Hit the Ground Runnin'",
-  "Fantasy", "Twitch", "Mine", "Donkey Hotel", "Undivided", 
-   "Bloodshot Rose", "Blue Light", "Cliffs", "Dome People",
-  "Drunk People", "Dutchmaster", "E Funk", "Feet on the Ground", "Funkijam", "Go With it", "J-Town",
-  "Miyagi", "Montreal", "Philosophy", "Puddles", "Say Cheese", "Show Me", "Spaced", "Spacejam",
-  "Steal the Shade", "The Hop", "The Labrynth", "The Switch", "The Turn", "This is that", "Treat Yourself",
-  "Weightless", "Where Are We Going?", "Winters Splinters", "Wireless", "New Song"
+    // ✅ Firestore-backed list (via your server's GET /songs)
+    let SONG_LIBRARY = [];
+    let songsLoaded = false;
 
-    ].sort((a,b) => a.localeCompare(b));
+    async function loadSongs() {
+      try {
+        const r = await fetch('/songs', { cache: 'no-store' });
+        const data = await r.json();
+        SONG_LIBRARY = Array.isArray(data.songs) ? data.songs : [];
+        SONG_LIBRARY.sort((a,b) => String(a).localeCompare(String(b)));
+        document.getElementById('helperText').textContent =
+          SONG_LIBRARY.length
+            ? `Pick songs from the dropdowns — it saves automatically. (${SONG_LIBRARY.length} songs)`
+            : `Pick songs from the dropdowns — it saves automatically. (No songs returned)`;
+        songsLoaded = true;
+      } catch (e) {
+        console.error('Failed to load songs', e);
+        SONG_LIBRARY = [];
+        document.getElementById('helperText').textContent =
+          `Pick songs from the dropdowns — it saves automatically. (Songs failed to load)`;
+        songsLoaded = true; // prevent retry loop; refresh page if needed
+      }
+    }
+
+    function setHeader() {
+      const box = document.getElementById('sessionNameBox');
+      box.innerHTML = `<span class="session-title">Session: ${sessionId}${username ? ` • you are ${username}` : ''}</span>`;
+    }
 
     function finishLogin(name) {
       username = name;
       localStorage.setItem('setlist-username', username);
-      document.getElementById('sessionNameBox').textContent =
-        `Session: ${sessionId} • you are ${username}`;
+      setHeader();
       document.getElementById('nameOverlay').style.display = 'none';
       socket.emit('join', { sessionId, username });
     }
 
     // if we already had username, skip modal
     if (username) {
-      document.getElementById('sessionNameBox').textContent =
-        `Session: ${sessionId} • you are ${username}`;
+      setHeader();
       document.getElementById('nameOverlay').style.display = 'none';
       socket.emit('join', { sessionId, username });
     } else {
+      setHeader();
       const btn = document.getElementById('nameSubmit');
       const input = document.getElementById('nameInput');
       btn.addEventListener('click', () => {
@@ -424,115 +407,112 @@
           value.textContent = currentVal ? currentVal : '—';
           card.appendChild(value);
 
-          // only my board gets the select
-   // only my board gets the picker
-if (isMyBoard) {
-  const controlWrap = document.createElement('div');
-  controlWrap.style.display = 'flex';
-  controlWrap.style.flexDirection = 'column';
-  controlWrap.style.gap = '.4rem';
+          // only my board gets the picker
+          if (isMyBoard) {
+            const controlWrap = document.createElement('div');
+            controlWrap.style.display = 'flex';
+            controlWrap.style.flexDirection = 'column';
+            controlWrap.style.gap = '.4rem';
 
-  // determine if currentVal is one of the library items
-  const isCustom = !!currentVal && !SONG_LIBRARY.includes(currentVal);
+            // If songs haven't loaded, show a lightweight placeholder control
+            if (!songsLoaded) {
+              const loading = document.createElement('div');
+              loading.style.fontSize = '.75rem';
+              loading.style.opacity = '.65';
+              loading.textContent = 'Loading songs…';
+              controlWrap.appendChild(loading);
+              card.appendChild(controlWrap);
+              grid.appendChild(card);
+              return;
+            }
 
-  // SELECT (with a "Type your own" sentinel)
-  const select = document.createElement('select');
+            // determine if currentVal is one of the library items
+            const isCustom = !!currentVal && !SONG_LIBRARY.includes(currentVal);
 
-  const optCustom = document.createElement('option');
-  optCustom.value = '__CUSTOM__';
-  optCustom.textContent = '— Type your own —';
-  select.appendChild(optCustom);
+            // SELECT (with a "Type your own" sentinel)
+            const select = document.createElement('select');
 
-  const placeholder = document.createElement('option');
-  placeholder.value = '';
-  placeholder.textContent = 'Choose song...';
-  placeholder.disabled = true;
-  select.appendChild(placeholder);
+            const optCustom = document.createElement('option');
+            optCustom.value = '__CUSTOM__';
+            optCustom.textContent = '— Type your own —';
+            select.appendChild(optCustom);
 
-  SONG_LIBRARY.forEach(song => {
-    const opt = document.createElement('option');
-    opt.value = song;
-    opt.textContent = song;
-    select.appendChild(opt);
-  });
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = 'Choose song...';
+            placeholder.disabled = true;
+            select.appendChild(placeholder);
 
-  // preselect appropriately
-  if (isCustom) {
-    select.value = '__CUSTOM__';
-  } else if (currentVal) {
-    select.value = currentVal;
-  } else {
-    select.value = '';
-  }
+            SONG_LIBRARY.forEach(song => {
+              const opt = document.createElement('option');
+              opt.value = song;
+              opt.textContent = song;
+              select.appendChild(opt);
+            });
 
-  // TEXT INPUT (hidden unless "__CUSTOM__" is chosen)
-  const input = document.createElement('input');
-  input.type = 'text';
-  input.placeholder = 'Type a song...';
-  input.value = isCustom ? currentVal : '';
-  // dark styling to match your theme
-  input.style.background = 'rgba(2,6,23,0.9)';
-  input.style.border = '1px solid rgba(148,163,184,0.45)';
-  input.style.borderRadius = '.45rem';
-  input.style.padding = '.35rem .4rem';
-  input.style.color = '#e2e8f0';
-  input.style.display = (select.value === '__CUSTOM__') ? 'block' : 'none';
+            // preselect appropriately
+            if (isCustom) {
+              select.value = '__CUSTOM__';
+            } else if (currentVal) {
+              select.value = currentVal;
+            } else {
+              select.value = '';
+            }
 
-  // optional mini button to quickly hide the input and go back to the dropdown
-  const backBtn = document.createElement('button');
-  backBtn.textContent = 'Use dropdown';
-  backBtn.style.background = 'rgba(148,163,184,0.05)';
-  backBtn.style.border = '1px solid rgba(148,163,184,0.25)';
-  backBtn.style.padding = '2px 6px';
-  backBtn.style.fontSize = '.75rem';
-  backBtn.style.width = 'fit-content';
-  backBtn.style.display = (select.value === '__CUSTOM__') ? 'inline-block' : 'none';
+            // TEXT INPUT (hidden unless "__CUSTOM__" is chosen)
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.placeholder = 'Type a song...';
+            input.value = isCustom ? currentVal : '';
+            input.className = 'inline-input';
+            input.style.display = (select.value === '__CUSTOM__') ? 'block' : 'none';
 
-  // when selection changes
-  select.addEventListener('change', () => {
-    if (select.value === '__CUSTOM__') {
-      input.style.display = 'block';
-      backBtn.style.display = 'inline-block';
-      input.focus();
-    } else if (select.value) {
-      input.style.display = 'none';
-      backBtn.style.display = 'none';
-      // save immediately
-      socket.emit('set-song', {
-        sessionId,
-        slot,
-        value: select.value,
-        username
-      });
-    }
-  });
+            const backBtn = document.createElement('button');
+            backBtn.textContent = 'Use dropdown';
+            backBtn.style.background = 'rgba(148,163,184,0.05)';
+            backBtn.style.border = '1px solid rgba(148,163,184,0.25)';
+            backBtn.style.padding = '2px 6px';
+            backBtn.style.fontSize = '.75rem';
+            backBtn.style.width = 'fit-content';
+            backBtn.style.display = (select.value === '__CUSTOM__') ? 'inline-block' : 'none';
 
-  // saving the custom text (on Enter or blur)
-  const saveCustom = () => {
-    const val = input.value.trim();
-    if (!val) return;
-    socket.emit('set-song', { sessionId, slot, value: val, username });
-  };
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') saveCustom(); });
-  input.addEventListener('blur', saveCustom);
+            select.addEventListener('change', () => {
+              if (select.value === '__CUSTOM__') {
+                input.style.display = 'block';
+                backBtn.style.display = 'inline-block';
+                input.focus();
+              } else if (select.value) {
+                input.style.display = 'none';
+                backBtn.style.display = 'none';
+                socket.emit('set-song', {
+                  sessionId,
+                  slot,
+                  value: select.value,
+                  username
+                });
+              }
+            });
 
-  // go back to dropdown UX
-  backBtn.addEventListener('click', () => {
-    input.style.display = 'none';
-    backBtn.style.display = 'none';
-    // keep choice open—user can pick a dropdown option next
-    select.value = '';
-    select.focus();
-  });
+            const saveCustom = () => {
+              const val = input.value.trim();
+              if (!val) return;
+              socket.emit('set-song', { sessionId, slot, value: val, username });
+            };
+            input.addEventListener('keydown', (e) => { if (e.key === 'Enter') saveCustom(); });
+            input.addEventListener('blur', saveCustom);
 
-  controlWrap.appendChild(select);
-  controlWrap.appendChild(input);
-  controlWrap.appendChild(backBtn);
-  card.appendChild(controlWrap);
-}
+            backBtn.addEventListener('click', () => {
+              input.style.display = 'none';
+              backBtn.style.display = 'none';
+              select.value = '';
+              select.focus();
+            });
 
-
-
+            controlWrap.appendChild(select);
+            controlWrap.appendChild(input);
+            controlWrap.appendChild(backBtn);
+            card.appendChild(controlWrap);
+          }
 
           grid.appendChild(card);
         });
@@ -542,7 +522,9 @@ if (isMyBoard) {
       });
     }
 
-    socket.on('update-session', (session) => {
+    // When we get session updates, ensure songs are loaded once first
+    socket.on('update-session', async (session) => {
+      if (!songsLoaded) await loadSongs();
       renderGrid(session);
     });
 

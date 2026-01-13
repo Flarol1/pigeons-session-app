@@ -1,93 +1,38 @@
-// server.js
+// server.js — Firestore-backed (with in-memory fallback)
+// Requires: npm i firebase-admin
+//
+// Env you should set on Cloud Run (recommended):
+//   FIREBASE_PROJECT_ID=your-gcp-project-id
+// And run Cloud Run with a service account that has:
+//   "Cloud Datastore User" (Firestore access)
+//
+// Optional:
+//   DISABLE_FIRESTORE=1  -> forces in-memory mode
+
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
 
-// ───────────────── DB mode detection ─────────────────
-const DB_DISABLED =
-  String(process.env.DISABLE_DB || '').trim() === '1' ||
-  ((!process.env.PGUSER || !process.env.PGPASSWORD || !process.env.PGDATABASE) &&
-    !process.env.INSTANCE_CONNECTION_NAME);
+const admin = require('firebase-admin');
 
-let pool = null;
-let useSocket = false;
-let useSsl = false;
-let defaultHost = process.env.PGHOST || 'localhost';
+// ───────────────── Firestore mode detection ─────────────────
+const FIRESTORE_DISABLED =
+  String(process.env.DISABLE_FIRESTORE || '').trim() === '1' ||
+  !String(process.env.FIREBASE_PROJECT_ID || '').trim();
 
-if (!DB_DISABLED) {
-  const { Pool } = require('pg');
-  const INSTANCE_CONNECTION_NAME = process.env.INSTANCE_CONNECTION_NAME || '';
-  defaultHost = INSTANCE_CONNECTION_NAME
-    ? `/cloudsql/${INSTANCE_CONNECTION_NAME}` // Cloud Run unix socket
-    : process.env.PGHOST || 'localhost';
+let fs = null;
 
-  useSocket = String(defaultHost || '').startsWith('/cloudsql');
-  useSsl = !useSocket && String(process.env.PGSSL || '').toLowerCase() === 'true';
-
-  pool = new Pool({
-    host: process.env.PGHOST || defaultHost,
-    user: process.env.PGUSER,
-    password: process.env.PGPASSWORD,
-    database: process.env.PGDATABASE,
-    port: process.env.PGPORT ? Number(process.env.PGPORT) : 5432,
-    ssl: useSsl ? { rejectUnauthorized: false } : false,
-    connectionTimeoutMillis: 8000,
-    idleTimeoutMillis: 30000,
+if (!FIRESTORE_DISABLED) {
+  // Uses Application Default Credentials (ADC) on Cloud Run
+  admin.initializeApp({
+    projectId: process.env.FIREBASE_PROJECT_ID,
   });
-  pool.on('error', (e) => console.error('[PG POOL ERROR]', e));
-}
+  fs = admin.firestore();
 
-console.log(
-  '[BOOT]',
-  DB_DISABLED
-    ? 'DB DISABLED → using in-memory'
-    : JSON.stringify({
-        host:
-          process.env.PGHOST ||
-          (process.env.INSTANCE_CONNECTION_NAME
-            ? `/cloudsql/${process.env.INSTANCE_CONNECTION_NAME}`
-            : 'localhost'),
-        db: process.env.PGDATABASE,
-        user: process.env.PGUSER,
-        usingSocket: useSocket,
-        ssl: useSsl,
-      })
-);
-
-// ───────────────── Schema (PG only) ─────────────────
-async function initSchema() {
-  if (DB_DISABLED) return;
-
-  // Owner column kept for backward-compatibility; not used for permissions.
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS sessions (
-      id TEXT PRIMARY KEY,
-      owner TEXT,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    );
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS session_users (
-      session_id TEXT NOT NULL,
-      username   TEXT NOT NULL,
-      PRIMARY KEY (session_id, username),
-      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
-    );
-  `);
-
-  // NOTE: slot is TEXT → no DB change required to support "Song 6"
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS user_picks (
-      session_id TEXT NOT NULL,
-      username   TEXT NOT NULL,
-      slot       TEXT NOT NULL,
-      value      TEXT NOT NULL,
-      PRIMARY KEY (session_id, username, slot),
-      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
-    );
-  `);
+  console.log('[BOOT] Firestore enabled:', process.env.FIREBASE_PROJECT_ID);
+} else {
+  console.log('[BOOT] Firestore disabled → using in-memory');
 }
 
 // ───────────────── Data layer ─────────────────
@@ -133,23 +78,20 @@ const PRESET_SESSIONS = [
   { id: '2026-03-14-columbus-oh-the-bluestone-1', title: 'Mar 14, 2026 — The Bluestone (Columbus, OH)' },
 
   { id: '2026-03-28-estes-park-co-frozen-dead-guy-days-coffin-race-1', title: 'Mar 28, 2026 — Frozen Dead Guy Days & Coffin Race (Estes Park, CO)' },
+
   { id: '2026-08-06-new-river-gorge-wv-domefest-1', title: 'Aug 6, 2026 — Domefest (New River Gorge, WV)' },
   { id: '2026-08-07-new-river-gorge-wv-domefest-2', title: 'Aug 7, 2026 — Domefest (New River Gorge, WV)' },
   { id: '2026-08-08-new-river-gorge-wv-domefest-3', title: 'Aug 8, 2026 — Domefest (New River Gorge, WV)' },
+];
 
-]
-
-;
-
-
-// In-memory fallback
+// ───────────────── In-memory fallback ─────────────────
 const mem = {
   sessions: new Map(), // id -> { users:Set, picks: Map("user|slot" -> value) }
+  songs: new Set(),
 };
+
 function memEnsureSession(id) {
-  if (!mem.sessions.has(id)) {
-    mem.sessions.set(id, { users: new Set(), picks: new Map() });
-  }
+  if (!mem.sessions.has(id)) mem.sessions.set(id, { users: new Set(), picks: new Map() });
 }
 function memEnsureUser(id, username) {
   memEnsureSession(id);
@@ -174,11 +116,11 @@ function memClearBoard(id, username) {
 function memBuildState(id) {
   const s = mem.sessions.get(id) || { users: new Set(), picks: new Map() };
   const state = { owner: null, users: [], userSongs: {} };
-  [...s.users]
-    .sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' }))
-    .forEach((u) => {
-      state.users.push({ socketId: null, username: u });
-    });
+
+  [...s.users].sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' })).forEach((u) => {
+    state.users.push({ socketId: null, username: u });
+  });
+
   for (const [key, val] of s.picks.entries()) {
     const [u, slot] = key.split('|');
     if (!state.userSongs[u]) state.userSongs[u] = {};
@@ -186,69 +128,123 @@ function memBuildState(id) {
   }
   return state;
 }
+function memGetSongs() {
+  return Array.from(mem.songs).sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' }));
+}
+function memAddSong(name) {
+  mem.songs.add(name);
+}
 
-// Postgres impls
-async function pgEnsureSession(sessionId) {
-  await pool.query(
-    `INSERT INTO sessions (id) VALUES ($1)
-     ON CONFLICT (id) DO NOTHING;`,
-    [sessionId]
-  );
+// ───────────────── Firestore impls ─────────────────
+//
+// Collections layout:
+//
+// sessions/{sessionId}
+// sessions/{sessionId}/users/{userKey}   { username }
+// sessions/{sessionId}/boards/{userKey}  { username, "Opener": "...", "Song 2": "...", ... }
+//
+// songs/{songKey}  { name, createdAt }
+//
+// Notes:
+// - Document IDs cannot contain "/" so we sanitize.
+// - We store slot values as dynamic fields on the user's board doc (simple + cheap).
+//
+function userKey(username) {
+  return String(username || '').trim().replaceAll('/', '_');
 }
-async function pgEnsureUser(sessionId, username) {
-  await pool.query(
-    `INSERT INTO session_users (session_id, username)
-     VALUES ($1, $2)
-     ON CONFLICT (session_id, username) DO NOTHING;`,
-    [sessionId, username]
-  );
+function songKey(name) {
+  return String(name || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replaceAll('/', '-')
+    .replace(/[^a-z0-9\-]/g, '');
 }
-async function pgUpsertPick(sessionId, username, slot, value) {
-  await pool.query(
-    `INSERT INTO user_picks (session_id, username, slot, value)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (session_id, username, slot)
-     DO UPDATE SET value = EXCLUDED.value;`,
-    [sessionId, username, slot, value]
-  );
+
+async function fsEnsureSession(sessionId) {
+  await fs.collection('sessions').doc(sessionId).set({ id: sessionId }, { merge: true });
 }
-async function pgDeletePick(sessionId, username, slot) {
-  await pool.query(
-    `DELETE FROM user_picks
-      WHERE session_id = $1 AND username = $2 AND slot = $3;`,
-    [sessionId, username, slot]
-  );
+async function fsEnsureUser(sessionId, username) {
+  await fsEnsureSession(sessionId);
+  await fs.collection('sessions')
+    .doc(sessionId)
+    .collection('users')
+    .doc(userKey(username))
+    .set({ username }, { merge: true });
 }
-async function pgClearBoard(sessionId, username) {
-  await pool.query(
-    `DELETE FROM user_picks
-      WHERE session_id = $1 AND username = $2;`,
-    [sessionId, username]
-  );
+async function fsUpsertPick(sessionId, username, slot, value) {
+  await fsEnsureUser(sessionId, username);
+  await fs.collection('sessions')
+    .doc(sessionId)
+    .collection('boards')
+    .doc(userKey(username))
+    .set({ username, [slot]: value }, { merge: true });
 }
-async function pgBuildState(sessionId) {
-  const state = { owner: null, users: [], userSongs: {} };
-  const u = await pool.query(
-    `SELECT username FROM session_users
-      WHERE session_id = $1
-      ORDER BY username COLLATE "C";`,
-    [sessionId]
-  );
-  state.users = u.rows.map((r) => ({ socketId: null, username: r.username }));
-  const picks = await pool.query(
-    `SELECT username, slot, value FROM user_picks
-      WHERE session_id = $1;`,
-    [sessionId]
-  );
-  for (const row of picks.rows) {
-    if (!state.userSongs[row.username]) state.userSongs[row.username] = {};
-    state.userSongs[row.username][row.slot] = row.value;
+async function fsDeletePick(sessionId, username, slot) {
+  const ref = fs.collection('sessions')
+    .doc(sessionId)
+    .collection('boards')
+    .doc(userKey(username));
+
+  await ref.set({ [slot]: admin.firestore.FieldValue.delete() }, { merge: true });
+}
+async function fsClearBoard(sessionId, username) {
+  const ref = fs.collection('sessions')
+    .doc(sessionId)
+    .collection('boards')
+    .doc(userKey(username));
+
+  const snap = await ref.get();
+  if (!snap.exists) return;
+
+  const data = snap.data() || {};
+  const updates = {};
+  for (const k of Object.keys(data)) {
+    if (k !== 'username') updates[k] = admin.firestore.FieldValue.delete();
   }
+  if (Object.keys(updates).length) {
+    await ref.set(updates, { merge: true });
+  }
+}
+async function fsBuildState(sessionId) {
+  const state = { owner: null, users: [], userSongs: {} };
+
+  const usersSnap = await fs.collection('sessions').doc(sessionId).collection('users').get();
+  state.users = usersSnap.docs
+    .map((d) => d.data()?.username)
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' }))
+    .map((u) => ({ socketId: null, username: u }));
+
+  const boardsSnap = await fs.collection('sessions').doc(sessionId).collection('boards').get();
+  boardsSnap.docs.forEach((doc) => {
+    const b = doc.data() || {};
+    const uname = b.username || doc.id;
+    state.userSongs[uname] = {};
+    for (const [k, v] of Object.entries(b)) {
+      if (k === 'username') continue;
+      state.userSongs[uname][k] = v;
+    }
+  });
+
   return state;
 }
 
-// Choose backend (PG or memory)
-const api = DB_DISABLED
+async function fsGetSongs() {
+  const snap = await fs.collection('songs').orderBy('name').get();
+  return snap.docs.map((d) => d.data()?.name).filter(Boolean);
+}
+async function fsAddSong(name) {
+  const clean = String(name || '').trim();
+  const id = songKey(clean) || userKey(clean) || clean; // ensure non-empty-ish
+  await fs.collection('songs').doc(id).set(
+    { name: clean, createdAt: admin.firestore.FieldValue.serverTimestamp() },
+    { merge: true }
+  );
+}
+
+// Choose backend (Firestore or memory)
+const api = FIRESTORE_DISABLED
   ? {
       ensureSession: memEnsureSession,
       ensureUser: memEnsureUser,
@@ -256,18 +252,24 @@ const api = DB_DISABLED
       deletePick: memDeletePick,
       clearBoard: memClearBoard,
       buildState: memBuildState,
+      getSongs: async () => memGetSongs(),
+      addSong: async (name) => memAddSong(name),
     }
   : {
-      ensureSession: pgEnsureSession,
-      ensureUser: pgEnsureUser,
-      upsertPick: pgUpsertPick,
-      deletePick: pgDeletePick,
-      clearBoard: pgClearBoard,
-      buildState: pgBuildState,
+      ensureSession: fsEnsureSession,
+      ensureUser: fsEnsureUser,
+      upsertPick: fsUpsertPick,
+      deletePick: fsDeletePick,
+      clearBoard: fsClearBoard,
+      buildState: fsBuildState,
+      getSongs: fsGetSongs,
+      addSong: fsAddSong,
     };
 
 // ───────────────── App / sockets ─────────────────
 const app = express();
+app.use(express.json());
+
 const server = http.createServer(app);
 const io = new Server(server);
 
@@ -284,13 +286,41 @@ app.get('/sessions', (req, res) => {
 // health + dbcheck
 app.get('/healthz', (req, res) => res.send('ok'));
 app.get('/dbcheck', async (req, res) => {
-  if (DB_DISABLED) return res.type('text').send('DB DISABLED (in-memory)');
+  if (FIRESTORE_DISABLED) return res.type('text').send('FIRESTORE DISABLED (in-memory)');
   try {
-    const r = await pool.query('SELECT 1 AS ok, NOW() AS ts');
-    res.type('text').send(`DB OK: ${r.rows[0].ok} @ ${r.rows[0].ts}`);
+    // very small read/write-free check
+    await fs.collection('_health').doc('ping').get();
+    res.type('text').send('FIRESTORE OK');
   } catch (e) {
     console.error('[DBCHECK ERROR]', e);
-    res.status(500).type('text').send('DB FAIL: ' + e.message);
+    res.status(500).type('text').send('FIRESTORE FAIL: ' + e.message);
+  }
+});
+
+// ───────────────── Songs API ─────────────────
+// Get all songs (sorted)
+app.get('/songs', async (req, res) => {
+  try {
+    const songs = await api.getSongs();
+    res.json({ songs });
+  } catch (e) {
+    console.error('[GET /songs ERROR]', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Add a song (idempotent-ish)
+app.post('/songs', async (req, res) => {
+  const name = String(req.body?.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'Missing name' });
+  if (name.length > 120) return res.status(400).json({ error: 'Name too long' });
+
+  try {
+    await api.addSong(name);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[POST /songs ERROR]', e);
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -300,7 +330,7 @@ const socketMap = new Map(); // socket.id -> { sessionId, username }
 io.on('connection', (socket) => {
   // JOIN: register user and room
   socket.on('join', async ({ sessionId, username }) => {
-    const cleanId = decodeURIComponent(sessionId || '').trim();
+    const cleanId = decodeURIComponent(String(sessionId || '')).trim();
     const cleanUser = String(username || '').trim();
 
     if (!cleanId || !cleanUser) {
@@ -330,11 +360,11 @@ io.on('connection', (socket) => {
     const who = socketMap.get(socket.id);
     if (!who) return socket.emit('error', 'Not joined.');
 
-    const cleanId = who.sessionId || decodeURIComponent(sessionId || '').trim();
+    const cleanId = who.sessionId || decodeURIComponent(String(sessionId || '')).trim();
     const caller = who.username;
 
-    const cleanSlot = String(slot || '').trim();        // ✅ normalize
-    const cleanValue = String(value ?? '').trim();      // ✅ normalize
+    const cleanSlot = String(slot || '').trim();
+    const cleanValue = String(value ?? '').trim();
 
     if (!SONG_SLOTS.includes(cleanSlot)) {
       return socket.emit(
@@ -344,7 +374,7 @@ io.on('connection', (socket) => {
     }
 
     try {
-      // Optional UX: empty value deletes the pick
+      // Empty value deletes the pick
       if (!cleanValue) {
         await api.deletePick(cleanId, caller, cleanSlot);
       } else {
@@ -364,7 +394,7 @@ io.on('connection', (socket) => {
     const who = socketMap.get(socket.id);
     if (!who) return socket.emit('error', 'Not joined.');
 
-    const cleanId = who.sessionId || decodeURIComponent(sessionId || '').trim();
+    const cleanId = who.sessionId || decodeURIComponent(String(sessionId || '')).trim();
     const caller = who.username;
     const cleanSlot = String(slot || '').trim();
 
@@ -378,12 +408,12 @@ io.on('connection', (socket) => {
     }
   });
 
-  // CLEAR ALL: now only clears the caller’s board
+  // CLEAR ALL: only clears the caller’s board
   socket.on('clear-all', async ({ sessionId }) => {
     const who = socketMap.get(socket.id);
     if (!who) return socket.emit('error', 'Not joined.');
 
-    const cleanId = who.sessionId || decodeURIComponent(sessionId || '').trim();
+    const cleanId = who.sessionId || decodeURIComponent(String(sessionId || '')).trim();
     const caller = who.username;
 
     try {
@@ -410,10 +440,5 @@ io.on('connection', (socket) => {
 const PORT = process.env.PORT || 8080; // Cloud Run expects 8080
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
-  console.log(`[DB CONFIG] host=${process.env.PGHOST || defaultHost} usingSocket=${useSocket} ssl=${useSsl}`);
+  console.log(`[FS CONFIG] enabled=${!FIRESTORE_DISABLED} project=${process.env.FIREBASE_PROJECT_ID || '(none)'}`);
 });
-
-// init DB without blocking the port (Cloud Run health passes)
-initSchema()
-  .then(() => console.log('DB schema ready'))
-  .catch((e) => console.error('DB init failed (serving anyway):', e.message));
