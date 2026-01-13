@@ -284,7 +284,9 @@
       <div style="font-size:.7rem; opacity:.6;">
         Pick songs from the dropdowns — it saves automatically.
       </div>
-      <button id="clearButton">Clear All</button>
+  <button id="addSongButton">Add Song</button>
+<button id="clearButton">Clear All</button>
+
     </div>
     <div id="wordsList"></div>
   </div>
@@ -310,7 +312,7 @@
       "Bustout"
     ];
 
-    const SONG_LIBRARY = [
+    const FALLBACK_SONG_LIBRARY= [
   "Stay", "Funk E Zekial", "Landing", "French Cafe", "Overtired", "Totally", "On the Rise", "Couldn't We All",
   "F.U.", "Melting Lights", "Julia", "Schwanthem", "Zydeko", "Time To Ride", "Sunny Day", "Moonwalk", "Horizon",
   "Lightning", "White Night", "Live Life", "Upfunk", "Live It Up", "Walk Outside", "Burning Up My Time",
@@ -330,6 +332,28 @@
   "Weightless", "Where Are We Going?", "Winters Splinters", "Wireless", "New Song"
 
     ].sort((a,b) => a.localeCompare(b));
+
+    
+async function loadSongsFromServer() {
+  try {
+    const r = await fetch('/songs', { cache: 'no-store' });
+    const data = await r.json();
+    const serverSongs = Array.isArray(data.songs) ? data.songs : [];
+
+    const merged = new Set([...FALLBACK_SONG_LIBRARY, ...serverSongs]
+      .map(s => String(s).trim())
+      .filter(Boolean)
+    );
+
+    SONG_LIBRARY = Array.from(merged).sort((a,b)=>a.localeCompare(b));
+  } catch (e) {
+    SONG_LIBRARY = [...FALLBACK_SONG_LIBRARY];
+  }
+}
+(async () => {
+  await loadSongsFromServer();
+})();
+
 
     function finishLogin(name) {
       username = name;
