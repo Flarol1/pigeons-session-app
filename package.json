@@ -9,6 +9,7 @@
     "start:local": "FIREBASE_PROJECT_ID=your-project-id node server.js"
   },
   "dependencies": {
+    "@google-cloud/firestore": "^8.1.0",
     "dotenv": "^16.4.5",
     "express": "^4.21.2",
     "firebase-admin": "^12.7.0",
