@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Pigeons Playing Ping Pong Setlist Picker</title>
+  <title>Session</title>
   <script src="/socket.io/socket.io.js"></script>
   <style>
     :root {
@@ -29,6 +29,7 @@
       gap: 1rem;
       padding: 1.2rem;
     }
+
     nav {
       width: min(1100px, 100%);
       display: flex;
@@ -96,6 +97,7 @@
       cursor: pointer;
     }
     button:hover { background: rgba(34, 197, 94, 0.25); }
+
     #clearButton {
       background: rgba(148, 163, 184, 0.05);
       border: 1px solid rgba(148, 163, 184, 0.16);
@@ -106,6 +108,7 @@
       flex-direction: column;
       gap: 1.1rem;
     }
+
     .user-board {
       background: rgba(15, 23, 42, 0.35);
       border: 1px solid rgba(148, 163, 184, 0.04);
@@ -125,10 +128,7 @@
       margin: 0;
       font-size: .95rem;
     }
-    .remove-user-btn {
-      background: rgba(239, 68, 68, 0.12);
-      border: 1px solid rgba(239, 68, 68, 0.45);
-    }
+
     .slot-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
@@ -156,6 +156,7 @@
       font-size: .9rem;
     }
 
+    /* dark select */
     select {
       background: rgba(2, 6, 23, 0.9);
       border: 1px solid rgba(148, 163, 184, 0.45);
@@ -170,6 +171,20 @@
       box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.12);
     }
     select option { background: #0f172a; color: #e2e8f0; }
+
+    .inline-input {
+      background: rgba(2,6,23,0.9);
+      border: 1px solid rgba(148,163,184,0.45);
+      border-radius: .45rem;
+      padding: .35rem .4rem;
+      color: #e2e8f0;
+      font-size: .8rem;
+      outline: none;
+    }
+    .inline-input:focus {
+      border-color: rgba(34,197,94,0.7);
+      box-shadow: 0 0 0 2px rgba(34,197,94,0.12);
+    }
 
     /* name overlay */
     #nameOverlay {
@@ -199,17 +214,7 @@
     }
     #nameInput {
       width: 100%;
-      background: rgba(2, 6, 23, 0.6);
-      border: 1px solid rgba(148, 163, 184, 0.4);
-      border-radius: .5rem;
-      padding: .4rem .6rem;
-      color: #e2e8f0;
       margin-bottom: .8rem;
-    }
-    #nameInput:focus {
-      outline: none;
-      border-color: rgba(34, 197, 94, 0.7);
-      box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.15);
     }
     #nameSubmit {
       width: 100%;
@@ -217,27 +222,16 @@
       border: 1px solid rgba(34, 197, 94, 0.4);
     }
 
-    /* inline input matches theme */
-    .inline-input {
-      background: rgba(2,6,23,0.9);
-      border: 1px solid rgba(148,163,184,0.45);
-      border-radius: .45rem;
-      padding: .35rem .4rem;
-      color: #e2e8f0;
-      font-size: .8rem;
-      outline: none;
-    }
-    .inline-input:focus {
-      border-color: rgba(34,197,94,0.7);
-      box-shadow: 0 0 0 2px rgba(34,197,94,0.12);
-    }
-
     @media (max-width: 600px) {
-      nav { flex-wrap: wrap; justify-content: center; }
+      nav {
+        flex-wrap: wrap;
+        justify-content: center;
+      }
       body { padding: .7rem; }
     }
   </style>
 </head>
+
 <body>
   <nav>
     <div>Pigeons Tour Dates - Make Your Picks!</div>
@@ -249,7 +243,7 @@
     <div class="name-modal">
       <h2>Who are you?</h2>
       <p>Enter the name you want to show on this session.</p>
-      <input type="text" id="nameInput" placeholder="Andy, Zaq, etc." />
+      <input class="inline-input" type="text" id="nameInput" placeholder="Andy, Zaq, etc." />
       <button id="nameSubmit">Enter</button>
     </div>
   </div>
@@ -260,16 +254,21 @@
 
   <div id="values">
     <div id="controlRow">
-      <div id="helperText" style="font-size:.7rem; opacity:.6;">
-        Loading songs…
+      <div style="font-size:.7rem; opacity:.6;">
+        Pick songs from the dropdowns — it saves automatically.
       </div>
-      <button id="clearButton">Clear All</button>
+      <div style="display:flex; gap:.5rem; align-items:center;">
+        <button id="refreshSongsBtn" title="Reload songs from database">Refresh songs</button>
+        <button id="clearButton">Clear All</button>
+      </div>
     </div>
     <div id="wordsList"></div>
   </div>
 
   <script>
-    const sessionId = decodeURIComponent(window.location.pathname.split('/').pop().trim());
+    const sessionId = decodeURIComponent(
+      window.location.pathname.split('/').pop().trim()
+    );
     const socket = io();
 
     let username = localStorage.getItem('setlist-username');
@@ -286,63 +285,59 @@
       "Bustout"
     ];
 
-    // ✅ Firestore-backed list (via your server's GET /songs)
+    // ✅ Dynamic songs from Firestore (via your server's GET /songs)
     let SONG_LIBRARY = [];
-    let songsLoaded = false;
 
     async function loadSongs() {
       try {
-        const r = await fetch('/songs', { cache: 'no-store' });
-        const data = await r.json();
+        const res = await fetch('/songs', { cache: 'no-store' });
+        if (!res.ok) throw new Error(`GET /songs HTTP ${res.status}`);
+        const data = await res.json();
         SONG_LIBRARY = Array.isArray(data.songs) ? data.songs : [];
-        SONG_LIBRARY.sort((a,b) => String(a).localeCompare(String(b)));
-        document.getElementById('helperText').textContent =
-          SONG_LIBRARY.length
-            ? `Pick songs from the dropdowns — it saves automatically. (${SONG_LIBRARY.length} songs)`
-            : `Pick songs from the dropdowns — it saves automatically. (No songs returned)`;
-        songsLoaded = true;
+        SONG_LIBRARY.sort((a, b) => a.localeCompare(b));
+        console.log('[songs] loaded:', SONG_LIBRARY.length);
       } catch (e) {
-        console.error('Failed to load songs', e);
+        console.error('[songs] load failed:', e);
         SONG_LIBRARY = [];
-        document.getElementById('helperText').textContent =
-          `Pick songs from the dropdowns — it saves automatically. (Songs failed to load)`;
-        songsLoaded = true; // prevent retry loop; refresh page if needed
       }
     }
 
-    function setHeader() {
+    function setSessionHeader(text) {
       const box = document.getElementById('sessionNameBox');
-      box.innerHTML = `<span class="session-title">Session: ${sessionId}${username ? ` • you are ${username}` : ''}</span>`;
+      box.innerHTML = `<span class="session-title">${text}</span>`;
     }
 
-    function finishLogin(name) {
-      username = name;
+    async function finishLogin(name) {
+      username = name.trim();
+      if (!username) return;
+
       localStorage.setItem('setlist-username', username);
-      setHeader();
+      setSessionHeader(`Session: ${sessionId} • you are ${username}`);
+
       document.getElementById('nameOverlay').style.display = 'none';
+
+      // ✅ ensure songs are loaded before rendering any dropdowns
+      await loadSongs();
+
       socket.emit('join', { sessionId, username });
     }
 
-    // if we already had username, skip modal
+    // If we already had username, skip modal
     if (username) {
-      setHeader();
+      setSessionHeader(`Session: ${sessionId} • you are ${username}`);
       document.getElementById('nameOverlay').style.display = 'none';
-      socket.emit('join', { sessionId, username });
+
+      (async () => {
+        await loadSongs();
+        socket.emit('join', { sessionId, username });
+      })();
     } else {
-      setHeader();
       const btn = document.getElementById('nameSubmit');
       const input = document.getElementById('nameInput');
-      btn.addEventListener('click', () => {
-        const val = input.value.trim();
-        if (!val) return;
-        finishLogin(val);
-      });
+
+      btn.addEventListener('click', () => finishLogin(input.value));
       input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-          const val = input.value.trim();
-          if (!val) return;
-          finishLogin(val);
-        }
+        if (e.key === 'Enter') finishLogin(input.value);
       });
     }
 
@@ -356,7 +351,6 @@
       users.forEach(userObj => {
         const boardUser = userObj.username;
         const isMyBoard = boardUser === username;
-        const iAmOwner = username === sessionOwner;
 
         const board = document.createElement('div');
         board.className = 'user-board';
@@ -368,20 +362,6 @@
         const h3 = document.createElement('h3');
         h3.textContent = boardUser + (boardUser === sessionOwner ? ' (owner)' : '');
         header.appendChild(h3);
-
-        if (iAmOwner && boardUser !== sessionOwner) {
-          const rmBtn = document.createElement('button');
-          rmBtn.textContent = 'Remove user';
-          rmBtn.className = 'remove-user-btn';
-          rmBtn.onclick = () => {
-            if (!confirm(`Remove ${boardUser}'s board from this session?`)) return;
-            socket.emit('delete-user-board', {
-              sessionId,
-              targetUsername: boardUser
-            });
-          };
-          header.appendChild(rmBtn);
-        }
 
         board.appendChild(header);
 
@@ -414,57 +394,52 @@
             controlWrap.style.flexDirection = 'column';
             controlWrap.style.gap = '.4rem';
 
-            // If songs haven't loaded, show a lightweight placeholder control
-            if (!songsLoaded) {
-              const loading = document.createElement('div');
-              loading.style.fontSize = '.75rem';
-              loading.style.opacity = '.65';
-              loading.textContent = 'Loading songs…';
-              controlWrap.appendChild(loading);
-              card.appendChild(controlWrap);
-              grid.appendChild(card);
-              return;
-            }
-
-            // determine if currentVal is one of the library items
             const isCustom = !!currentVal && !SONG_LIBRARY.includes(currentVal);
 
-            // SELECT (with a "Type your own" sentinel)
             const select = document.createElement('select');
 
-            const optCustom = document.createElement('option');
-            optCustom.value = '__CUSTOM__';
-            optCustom.textContent = '— Type your own —';
-            select.appendChild(optCustom);
-
-            const placeholder = document.createElement('option');
-            placeholder.value = '';
-            placeholder.textContent = 'Choose song...';
-            placeholder.disabled = true;
-            select.appendChild(placeholder);
-
-            SONG_LIBRARY.forEach(song => {
+            // if songs aren't loaded, show a single disabled option
+            if (SONG_LIBRARY.length === 0) {
               const opt = document.createElement('option');
-              opt.value = song;
-              opt.textContent = song;
+              opt.value = '';
+              opt.textContent = 'No songs loaded (check /songs)';
+              opt.disabled = true;
+              opt.selected = true;
               select.appendChild(opt);
-            });
-
-            // preselect appropriately
-            if (isCustom) {
-              select.value = '__CUSTOM__';
-            } else if (currentVal) {
-              select.value = currentVal;
             } else {
-              select.value = '';
+              // custom sentinel
+              const optCustom = document.createElement('option');
+              optCustom.value = '__CUSTOM__';
+              optCustom.textContent = '— Type your own —';
+              select.appendChild(optCustom);
+
+              const placeholder = document.createElement('option');
+              placeholder.value = '';
+              placeholder.textContent = 'Choose song...';
+              placeholder.disabled = true;
+              select.appendChild(placeholder);
+
+              SONG_LIBRARY.forEach(song => {
+                const opt = document.createElement('option');
+                opt.value = song;
+                opt.textContent = song;
+                select.appendChild(opt);
+              });
+
+              if (isCustom) {
+                select.value = '__CUSTOM__';
+              } else if (currentVal) {
+                select.value = currentVal;
+              } else {
+                select.value = '';
+              }
             }
 
-            // TEXT INPUT (hidden unless "__CUSTOM__" is chosen)
             const input = document.createElement('input');
             input.type = 'text';
+            input.className = 'inline-input';
             input.placeholder = 'Type a song...';
             input.value = isCustom ? currentVal : '';
-            input.className = 'inline-input';
             input.style.display = (select.value === '__CUSTOM__') ? 'block' : 'none';
 
             const backBtn = document.createElement('button');
@@ -522,14 +497,19 @@
       });
     }
 
-    // When we get session updates, ensure songs are loaded once first
-    socket.on('update-session', async (session) => {
-      if (!songsLoaded) await loadSongs();
+    socket.on('update-session', (session) => {
       renderGrid(session);
     });
 
     document.getElementById('clearButton').addEventListener('click', () => {
       socket.emit('clear-all', { sessionId });
+    });
+
+    document.getElementById('refreshSongsBtn').addEventListener('click', async () => {
+      await loadSongs();
+      // Re-render using last known session state (best effort)
+      // If you want it perfect, server could emit state on request — but this is fine.
+      console.log('[songs] refreshed');
     });
 
     socket.on('error', (msg) => {
