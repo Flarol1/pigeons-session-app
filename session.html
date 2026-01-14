@@ -1,414 +1,422 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Session</title>
-  <script src="/socket.io/socket.io.js"></script>
-  <style>
-    :root {
-      --page-bg: radial-gradient(circle at top, #0f172a 0%, #020617 55%);
-      --panel: rgba(15, 23, 42, 0.55);
-      --card: rgba(15, 23, 42, 0.7);
-      --border: rgba(148, 163, 184, 0.25);
-      --text: #e2e8f0;
-      --muted: #94a3b8;
-      --accent: #22c55e;
-      --danger: #ef4444;
+<script>
+  const sessionId = decodeURIComponent(
+    window.location.pathname.split('/').pop().trim()
+  );
+  const socket = io();
+
+  let username = localStorage.getItem('setlist-username');
+
+  const SONG_SLOTS = [
+    "Opener",
+    "Song 2",
+    "Song 3",
+    "Song 4",
+    "Song 5",
+    "Song 6",
+    "Encore",
+    "Cover",
+    "Bustout"
+  ];
+
+  // =========================
+  // Songs (dynamic from /songs)
+  // =========================
+  let SONG_LIBRARY = [];
+  let lastSessionState = null;
+
+  async function loadSongs() {
+    try {
+      const res = await fetch('/songs', { cache: 'no-store' });
+      if (!res.ok) throw new Error(`GET /songs HTTP ${res.status}`);
+      const data = await res.json();
+      SONG_LIBRARY = Array.isArray(data.songs) ? data.songs : [];
+      SONG_LIBRARY.sort((a, b) => a.localeCompare(b));
+      console.log('[songs] loaded:', SONG_LIBRARY.length);
+    } catch (e) {
+      console.error('[songs] load failed:', e);
+      SONG_LIBRARY = [];
     }
-    * { box-sizing: border-box; }
-    body {
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: var(--page-bg);
-      margin: 0;
-      min-height: 100vh;
-      color: var(--text);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 1rem;
-      padding: 1.2rem;
+  }
+
+  function setSessionHeader(text) {
+    const box = document.getElementById('sessionNameBox');
+    box.innerHTML = `<span class="session-title">${text}</span>`;
+  }
+
+  // =========================
+  // Name modal / login
+  // =========================
+  async function finishLogin(name) {
+    username = String(name || '').trim();
+    if (!username) return;
+
+    localStorage.setItem('setlist-username', username);
+    setSessionHeader(`Session: ${sessionId} • you are ${username}`);
+
+    document.getElementById('nameOverlay').style.display = 'none';
+
+    // Ensure songs are loaded before first grid render
+    await loadSongs();
+
+    socket.emit('join', { sessionId, username });
+  }
+
+  if (username) {
+    setSessionHeader(`Session: ${sessionId} • you are ${username}`);
+    document.getElementById('nameOverlay').style.display = 'none';
+
+    (async () => {
+      await loadSongs();
+      socket.emit('join', { sessionId, username });
+    })();
+  } else {
+    const btn = document.getElementById('nameSubmit');
+    const input = document.getElementById('nameInput');
+
+    btn.addEventListener('click', () => finishLogin(input.value));
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') finishLogin(input.value);
+    });
+  }
+
+  // =========================
+  // Render session grid
+  // =========================
+  function renderGrid(session) {
+    const container = document.getElementById('wordsList');
+    container.innerHTML = '';
+
+    const users = session.users || [];
+
+    users.forEach(userObj => {
+      const boardUser = userObj.username;
+      const isMyBoard = boardUser === username;
+
+      const board = document.createElement('div');
+      board.className = 'user-board';
+
+      // header
+      const header = document.createElement('div');
+      header.className = 'user-board-header';
+
+      const h3 = document.createElement('h3');
+      h3.textContent = boardUser;
+      header.appendChild(h3);
+
+      board.appendChild(header);
+
+      // grid
+      const grid = document.createElement('div');
+      grid.className = 'slot-grid';
+
+      SONG_SLOTS.forEach(slot => {
+        const card = document.createElement('div');
+        card.className = 'slot-card';
+
+        const title = document.createElement('h4');
+        title.textContent = slot;
+        card.appendChild(title);
+
+        const currentVal =
+          session.userSongs &&
+          session.userSongs[boardUser] &&
+          session.userSongs[boardUser][slot];
+
+        const value = document.createElement('div');
+        value.className = 'slot-value';
+        value.textContent = currentVal ? currentVal : '—';
+        card.appendChild(value);
+
+        // only my board gets the picker
+        if (isMyBoard) {
+          const controlWrap = document.createElement('div');
+          controlWrap.style.display = 'flex';
+          controlWrap.style.flexDirection = 'column';
+          controlWrap.style.gap = '.4rem';
+
+          const isCustom = !!currentVal && !SONG_LIBRARY.includes(currentVal);
+
+          const select = document.createElement('select');
+
+          if (SONG_LIBRARY.length === 0) {
+            const opt = document.createElement('option');
+            opt.value = '';
+            opt.textContent = 'No songs loaded (check /songs)';
+            opt.disabled = true;
+            opt.selected = true;
+            select.appendChild(opt);
+          } else {
+            const optCustom = document.createElement('option');
+            optCustom.value = '__CUSTOM__';
+            optCustom.textContent = '— Type your own —';
+            select.appendChild(optCustom);
+
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = 'Choose song...';
+            placeholder.disabled = true;
+            select.appendChild(placeholder);
+
+            SONG_LIBRARY.forEach(song => {
+              const opt = document.createElement('option');
+              opt.value = song;
+              opt.textContent = song;
+              select.appendChild(opt);
+            });
+
+            if (isCustom) select.value = '__CUSTOM__';
+            else if (currentVal) select.value = currentVal;
+            else select.value = '';
+          }
+
+          const input = document.createElement('input');
+          input.type = 'text';
+          input.className = 'inline-input';
+          input.placeholder = 'Type a song...';
+          input.value = isCustom ? currentVal : '';
+          input.style.display = (select.value === '__CUSTOM__') ? 'block' : 'none';
+
+          const backBtn = document.createElement('button');
+          backBtn.textContent = 'Use dropdown';
+          backBtn.className = 'btn-muted';
+          backBtn.style.padding = '2px 6px';
+          backBtn.style.fontSize = '.75rem';
+          backBtn.style.width = 'fit-content';
+          backBtn.style.display = (select.value === '__CUSTOM__') ? 'inline-block' : 'none';
+
+          select.addEventListener('change', () => {
+            if (select.value === '__CUSTOM__') {
+              input.style.display = 'block';
+              backBtn.style.display = 'inline-block';
+              input.focus();
+            } else if (select.value) {
+              input.style.display = 'none';
+              backBtn.style.display = 'none';
+              socket.emit('set-song', { sessionId, slot, value: select.value });
+            }
+          });
+
+          const saveCustom = () => {
+            const val = input.value.trim();
+            if (!val) return;
+            socket.emit('set-song', { sessionId, slot, value: val });
+          };
+          input.addEventListener('keydown', (e) => { if (e.key === 'Enter') saveCustom(); });
+          input.addEventListener('blur', saveCustom);
+
+          backBtn.addEventListener('click', () => {
+            input.style.display = 'none';
+            backBtn.style.display = 'none';
+            select.value = '';
+            select.focus();
+          });
+
+          controlWrap.appendChild(select);
+          controlWrap.appendChild(input);
+          controlWrap.appendChild(backBtn);
+          card.appendChild(controlWrap);
+        }
+
+        grid.appendChild(card);
+      });
+
+      board.appendChild(grid);
+      container.appendChild(board);
+    });
+  }
+
+  socket.on('update-session', (session) => {
+    lastSessionState = session;
+    renderGrid(session);
+  });
+
+  socket.on('error', (msg) => alert(msg));
+
+  document.getElementById('clearButton').addEventListener('click', () => {
+    socket.emit('clear-all', { sessionId });
+  });
+
+  document.getElementById('refreshSongsBtn').addEventListener('click', async () => {
+    await loadSongs();
+    if (lastSessionState) renderGrid(lastSessionState);
+  });
+
+  // =========================
+  // Song List modal (view + edit)
+  // =========================
+  const songListBtn = document.getElementById('songListBtn');
+  const songsOverlay = document.getElementById('songsOverlay');
+  const songsCloseBtn = document.getElementById('songsCloseBtn');
+  const songsEditBtn = document.getElementById('songsEditBtn');
+  const songsSearch = document.getElementById('songsSearch');
+  const songsList = document.getElementById('songsList');
+  const songsAdminBadge = document.getElementById('songsAdminBadge');
+  const songsEditPanel = document.getElementById('songsEditPanel');
+  const songsAddInput = document.getElementById('songsAddInput');
+  const songsAddBtn = document.getElementById('songsAddBtn');
+  const songsLogoutBtn = document.getElementById('songsLogoutBtn');
+
+  let songsEditMode = (sessionStorage.getItem('songs-edit') === '1');
+
+  function checkSongPassword(input) {
+    const v = String(input || '').trim().toLowerCase();
+    return v === 'zaq' || v === 'zack';
+  }
+
+  function setEditMode(on) {
+    songsEditMode = !!on;
+    sessionStorage.setItem('songs-edit', songsEditMode ? '1' : '0');
+
+    songsEditPanel.style.display = songsEditMode ? 'block' : 'none';
+    songsAdminBadge.textContent = songsEditMode ? 'Editing enabled' : 'View only';
+    songsEditBtn.textContent = songsEditMode ? 'Editing ✓' : 'Edit';
+
+    renderSongsList();
+  }
+
+  function openSongsModal() {
+    songsOverlay.style.display = 'flex';
+    songsSearch.value = '';
+    renderSongsList();
+    // refresh list from server each open
+    (async () => {
+      await loadSongs();
+      renderSongsList();
+      // also refresh dropdowns if you're currently on a session
+      if (lastSessionState) renderGrid(lastSessionState);
+    })();
+  }
+
+  function closeSongsModal() {
+    songsOverlay.style.display = 'none';
+  }
+
+  function renderSongsList() {
+    const q = String(songsSearch.value || '').trim().toLowerCase();
+    const filtered = q
+      ? SONG_LIBRARY.filter(s => String(s).toLowerCase().includes(q))
+      : SONG_LIBRARY;
+
+    songsList.innerHTML = '';
+
+    if (!filtered.length) {
+      const empty = document.createElement('div');
+      empty.style.opacity = '.7';
+      empty.style.fontSize = '.85rem';
+      empty.textContent = q ? 'No matches.' : 'No songs found.';
+      songsList.appendChild(empty);
+      return;
     }
 
-    nav {
-      width: min(1100px, 100%);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      background: rgba(2, 6, 23, 0.1);
-      backdrop-filter: blur(8px);
-      border: 1px solid rgba(148, 163, 184, 0.1);
-      border-radius: 9999px;
-      padding: 0.5rem 1rem;
-      gap: .75rem;
-    }
-    nav a {
-      color: var(--text);
-      text-decoration: none;
-      font-size: .8rem;
-      opacity: .8;
-    }
-    nav a:hover { opacity: 1; }
+    filtered.forEach(name => {
+      const row = document.createElement('div');
+      row.className = 'song-row';
 
-    /* Right controls in nav */
-    .nav-right {
-      display: flex;
-      align-items: center;
-      gap: .5rem;
-    }
+      const label = document.createElement('div');
+      label.className = 'song-name';
+      label.textContent = name;
+      row.appendChild(label);
 
-    /* Neon badge for the session header */
-    #sessionNameBox {
-      width: min(1100px, 100%);
-      border: 1px solid rgba(168, 85, 247, 0.35);
-      background: linear-gradient(120deg, rgba(34, 197, 94, 0.20), rgba(15, 23, 42, 0.28));
-      border-radius: 1rem;
-      padding: 0.9rem 1.1rem;
-      font-weight: 600;
-      text-align: center;
-      box-shadow:
-        0 0 10px rgba(168, 85, 247, 0.25),
-        inset 0 0 12px rgba(34, 197, 94, 0.20);
-    }
-    #sessionNameBox .session-title {
-      text-shadow:
-        0 0 2px rgba(168, 85, 247, 0.35),
-        0 0 5px rgba(34, 197, 94, 0.28);
-    }
+      const actions = document.createElement('div');
+      actions.style.display = 'flex';
+      actions.style.gap = '.4rem';
 
-    #values {
-      width: min(1100px, 100%);
-      background: rgba(2, 6, 23, 0.2);
-      backdrop-filter: blur(6px);
-      border: 1px solid rgba(148, 163, 184, 0.05);
-      border-radius: 1rem;
-      padding: 1.3rem 1.2rem 1.5rem;
-      box-shadow: 0 18px 24px rgba(0,0,0,.12);
-    }
-    #controlRow {
-      display: flex;
-      gap: .6rem;
-      flex-wrap: wrap;
-      margin-bottom: 1rem;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    button {
-      background: rgba(34, 197, 94, 0.12);
-      border: 1px solid rgba(34, 197, 94, 0.35);
-      color: var(--text);
-      padding: .5rem .9rem;
-      border-radius: .6rem;
-      font-weight: 500;
-      cursor: pointer;
-    }
-    button:hover { background: rgba(34, 197, 94, 0.25); }
-
-    #clearButton {
-      background: rgba(148, 163, 184, 0.05);
-      border: 1px solid rgba(148, 163, 184, 0.16);
-    }
-
-    #wordsList {
-      display: flex;
-      flex-direction: column;
-      gap: 1.1rem;
-    }
-
-    .user-board {
-      background: rgba(15, 23, 42, 0.35);
-      border: 1px solid rgba(148, 163, 184, 0.04);
-      border-radius: .9rem;
-      padding: .8rem .8rem 1rem;
-      display: flex;
-      flex-direction: column;
-      gap: .8rem;
-    }
-    .user-board-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: .5rem;
-    }
-    .user-board-header h3 {
-      margin: 0;
-      font-size: .95rem;
-    }
-
-    .slot-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-      gap: .7rem;
-    }
-    .slot-card {
-      background: rgba(15, 23, 42, 0.45);
-      border: 1px solid rgba(148, 163, 184, 0.08);
-      border-radius: .7rem;
-      padding: .5rem .5rem .7rem;
-      display: flex;
-      flex-direction: column;
-      gap: .4rem;
-      min-height: 120px;
-    }
-    .slot-card h4 {
-      margin: 0;
-      font-size: .75rem;
-      color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: .06em;
-    }
-    .slot-value {
-      font-weight: 600;
-      font-size: .9rem;
-    }
-
-    /* dark select */
-    select {
-      background: rgba(2, 6, 23, 0.9);
-      border: 1px solid rgba(148, 163, 184, 0.45);
-      border-radius: .45rem;
-      padding: .35rem .4rem;
-      color: #e2e8f0;
-      font-size: .8rem;
-      outline: none;
-    }
-    select:focus {
-      border-color: rgba(34, 197, 94, 0.7);
-      box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.12);
-    }
-    select option { background: #0f172a; color: #e2e8f0; }
-
-    .inline-input {
-      background: rgba(2,6,23,0.9);
-      border: 1px solid rgba(148,163,184,0.45);
-      border-radius: .45rem;
-      padding: .35rem .4rem;
-      color: #e2e8f0;
-      font-size: .8rem;
-      outline: none;
-    }
-    .inline-input:focus {
-      border-color: rgba(34,197,94,0.7);
-      box-shadow: 0 0 0 2px rgba(34,197,94,0.12);
-    }
-
-    /* name overlay */
-    #nameOverlay {
-      position: fixed;
-      inset: 0;
-      background: rgba(2, 6, 23, 0.7);
-      backdrop-filter: blur(6px);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 50;
-    }
-    .name-modal {
-      background: rgba(15, 23, 42, 0.9);
-      border: 1px solid rgba(148, 163, 184, 0.35);
-      border-radius: 1rem;
-      padding: 1.4rem 1.4rem 1.1rem;
-      width: min(360px, 90vw);
-      text-align: center;
-      box-shadow: 0 20px 45px rgba(0,0,0,.25);
-    }
-    .name-modal h2 { margin: 0 0 .5rem; }
-    .name-modal p {
-      margin: 0 0 .9rem;
-      color: rgba(226, 232, 240, .6);
-      font-size: .8rem;
-    }
-    #nameInput { width: 100%; margin-bottom: .8rem; }
-    #nameSubmit {
-      width: 100%;
-      background: rgba(34, 197, 94, 0.25);
-      border: 1px solid rgba(34, 197, 94, 0.4);
-    }
-
-    /* --- Songs overlay --- */
-    #songsOverlay {
-      position: fixed;
-      inset: 0;
-      background: rgba(2, 6, 23, 0.72);
-      backdrop-filter: blur(6px);
-      display: none;
-      align-items: center;
-      justify-content: center;
-      z-index: 80;
-    }
-    .songs-modal {
-      width: min(820px, 92vw);
-      max-height: 80vh;
-      overflow: auto;
-      background: rgba(15, 23, 42, 0.92);
-      border: 1px solid rgba(148, 163, 184, 0.35);
-      border-radius: 1rem;
-      padding: 1rem;
-      box-shadow: 0 20px 45px rgba(0,0,0,.25);
-    }
-    .songs-top {
-      display: flex;
-      gap: .6rem;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: .8rem;
-    }
-    .songs-top-title {
-      font-weight: 700;
-    }
-    .songs-controls {
-      display: flex;
-      gap: .5rem;
-      align-items: center;
-    }
-    .songs-subrow {
-      display: flex;
-      gap: .6rem;
-      flex-wrap: wrap;
-      margin-bottom: .8rem;
-      align-items: center;
-    }
-    .songs-badge {
-      font-size: .8rem;
-      opacity: .75;
-    }
-    .songs-edit-panel {
-      display: none;
-      border: 1px solid rgba(34,197,94,0.25);
-      border-radius: .8rem;
-      padding: .8rem;
-      margin-bottom: 1rem;
-    }
-    .songs-list {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-      gap: .5rem;
-    }
-    .song-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: .5rem;
-      padding: .5rem .6rem;
-      background: rgba(15, 23, 42, 0.45);
-      border: 1px solid rgba(148, 163, 184, 0.10);
-      border-radius: .6rem;
-    }
-    .song-name {
-      font-size: .85rem;
-      font-weight: 600;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      max-width: 340px;
-    }
-    .btn-danger {
-      background: rgba(239,68,68,0.12);
-      border: 1px solid rgba(239,68,68,0.45);
-    }
-    .btn-muted {
-      background: rgba(148, 163, 184, 0.05);
-      border: 1px solid rgba(148, 163, 184, 0.25);
-    }
-
-    @media (max-width: 600px) {
-      nav {
-        flex-wrap: wrap;
-        justify-content: center;
+      if (songsEditMode) {
+        const del = document.createElement('button');
+        del.textContent = 'Delete';
+        del.className = 'btn-danger';
+        del.onclick = async () => {
+          if (!confirm(`Delete "${name}"?`)) return;
+          await deleteSong(name);
+        };
+        actions.appendChild(del);
       }
-      body { padding: .7rem; }
+
+      row.appendChild(actions);
+      songsList.appendChild(row);
+    });
+  }
+
+  async function addSong(name) {
+    const clean = String(name || '').trim();
+    if (!clean) return;
+
+    try {
+      const res = await fetch('/songs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: clean })
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t || `HTTP ${res.status}`);
+      }
+
+      songsAddInput.value = '';
+      await loadSongs();
+      renderSongsList();
+      if (lastSessionState) renderGrid(lastSessionState);
+    } catch (e) {
+      console.error(e);
+      alert('Add failed: ' + e.message);
     }
-  </style>
-</head>
+  }
 
-<body>
-  <nav>
-    <div>Pigeons Tour Dates - Make Your Picks!</div>
+  async function deleteSong(name) {
+    try {
+      const res = await fetch('/songs', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name })
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t || `HTTP ${res.status}`);
+      }
 
-    <div class="nav-right">
-      <button id="songListBtn" class="btn-muted" title="View / edit song list">Song List</button>
-      <a href="/">Back to dates</a>
-    </div>
-  </nav>
+      await loadSongs();
+      renderSongsList();
+      if (lastSessionState) renderGrid(lastSessionState);
+    } catch (e) {
+      console.error(e);
+      alert('Delete failed: ' + e.message);
+    }
+  }
 
-  <!-- dark name modal -->
-  <div id="nameOverlay">
-    <div class="name-modal">
-      <h2>Who are you?</h2>
-      <p>Enter the name you want to show on this session.</p>
-      <input class="inline-input" type="text" id="nameInput" placeholder="Andy, Zaq, etc." />
-      <button id="nameSubmit">Enter</button>
-    </div>
-  </div>
+  // Hook up modal buttons
+  songListBtn.addEventListener('click', openSongsModal);
+  songsCloseBtn.addEventListener('click', closeSongsModal);
 
-  <!-- Songs modal -->
-  <div id="songsOverlay">
-    <div class="songs-modal">
-      <div class="songs-top">
-        <div class="songs-top-title">Song List</div>
-        <div class="songs-controls">
-          <button id="songsEditBtn">Edit</button>
-          <button id="songsCloseBtn" class="btn-muted">Close</button>
-        </div>
-      </div>
+  songsOverlay.addEventListener('click', (e) => {
+    if (e.target === songsOverlay) closeSongsModal();
+  });
 
-      <div class="songs-subrow">
-        <input id="songsSearch" class="inline-input" placeholder="Search songs..." style="flex:1; min-width:220px;" />
-        <div id="songsAdminBadge" class="songs-badge">View only</div>
-      </div>
+  songsSearch.addEventListener('input', renderSongsList);
 
-      <div id="songsEditPanel" class="songs-edit-panel">
-        <div style="display:flex; gap:.5rem; flex-wrap:wrap;">
-          <input id="songsAddInput" class="inline-input" placeholder="Add new song..." style="flex:1; min-width:220px;" />
-          <button id="songsAddBtn">Add</button>
-          <button id="songsLogoutBtn" class="btn-muted">Log out edit</button>
-        </div>
-        <div style="font-size:.75rem; opacity:.65; margin-top:.4rem;">
-          Edit access: enter <b>Zaq</b> or <b>Zack</b>.
-        </div>
-      </div>
+  songsEditBtn.addEventListener('click', () => {
+    if (songsEditMode) {
+      setEditMode(false);
+      return;
+    }
+    const pw = prompt('Enter edit password:');
+    if (!checkSongPassword(pw)) {
+      alert('Nope.');
+      return;
+    }
+    setEditMode(true);
+  });
 
-      <div id="songsList" class="songs-list"></div>
-    </div>
-  </div>
+  songsLogoutBtn.addEventListener('click', () => setEditMode(false));
 
-  <div id="sessionNameBox">
-    <span class="session-title">Loading session…</span>
-  </div>
+  songsAddBtn.addEventListener('click', () => addSong(songsAddInput.value));
+  songsAddInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') addSong(songsAddInput.value);
+  });
 
-  <div id="values">
-    <div id="controlRow">
-      <div style="font-size:.7rem; opacity:.6;">
-        Pick songs from the dropdowns — it saves automatically.
-      </div>
-      <div style="display:flex; gap:.5rem; align-items:center;">
-        <button id="refreshSongsBtn" title="Reload songs from database">Refresh songs</button>
-        <button id="clearButton">Clear All</button>
-      </div>
-    </div>
-    <div id="wordsList"></div>
-  </div>
+  // initialize edit UI state (in case sessionStorage kept it)
+  setEditMode(songsEditMode);
+</script>
 
-  <script>
-    const sessionId = decodeURIComponent(
-      window.location.pathname.split('/').pop().trim()
-    );
-    const socket = io();
-
-    let username = localStorage.getItem('setlist-username');
-
-    const SONG_SLOTS = [
-      "Opener",
-      "Song 2",
-      "Song 3",
-      "Song 4",
-      "Song 5",
-      "Song 6",
-      "Encore",
-      "Cover",
-      "Bustout"
-    ];
 
     // ✅ Dynamic songs from Firestore (via your server's GET /songs)
     let SONG_LIBRARY = [];
