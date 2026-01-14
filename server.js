@@ -289,6 +289,49 @@ app.post('/songs', async (req, res) => {
   }
 });
 
+
+// Add a song (idempotent)
+app.post('/songs', async (req, res) => {
+  try {
+    const name = String(req.body?.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'Missing name' });
+    if (name.length > 120) return res.status(400).json({ error: 'Name too long' });
+
+    // Use a safe doc id, but still store the real name for display
+    const docId = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+    const ref = db.collection('songs').doc(docId || undefined);
+
+    // Set merge so it's idempotent if it already exists
+    await ref.set({ name, updatedAt: new Date() }, { merge: true });
+
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[POST /songs ERROR]', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Delete a song
+app.delete('/songs', async (req, res) => {
+  try {
+    const name = String(req.body?.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'Missing name' });
+
+    // Find doc(s) by name and delete them
+    const snap = await db.collection('songs').where('name', '==', name).get();
+    if (snap.empty) return res.json({ ok: true, deleted: 0 });
+
+    const batch = db.batch();
+    snap.forEach(doc => batch.delete(doc.ref));
+    await batch.commit();
+
+    res.json({ ok: true, deleted: snap.size });
+  } catch (e) {
+    console.error('[DELETE /songs ERROR]', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ───────────────── Sockets ─────────────────
 
 // Track socket -> identity to prevent spoofing
