@@ -106,7 +106,6 @@ const PRESET_SESSIONS = [
   { id: '2026-07-11-honolulu-hi-blue-note-hawaii-late', title: 'Jul 11, 2026 — Blue Note Hawaii (Late Show) (Honolulu, HI)' },
   { id: '2026-07-18-marshfield-ma-levitate-music-and-arts-festival', title: 'Jul 18–19, 2026 — Levitate Music and Arts Festival (Marshfield, MA)' },
   { id: '2026-07-24-johnstown-pa-flood-city-music-festival', title: 'Jul 24–25, 2026 — Flood City Music Festival (Johnstown, PA)' },
-
   { id: '2026-08-06-new-river-gorge-wv-domefest-1', title: 'Aug 6, 2026 — Domefest (New River Gorge, WV)' },
   { id: '2026-08-07-new-river-gorge-wv-domefest-2', title: 'Aug 7, 2026 — Domefest (New River Gorge, WV)' },
   { id: '2026-08-08-new-river-gorge-wv-domefest-3', title: 'Aug 8, 2026 — Domefest (New River Gorge, WV)' },
