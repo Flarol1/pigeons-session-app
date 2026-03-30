@@ -395,6 +395,57 @@
       window.location.pathname.split('/').pop().trim()
     );
     const socket = io();
+    let IS_READ_ONLY = false;
+let CURRENT_SESSION_STATE = null;
+
+function parseSessionDate(sessionId) {
+  const parts = String(sessionId || '').split('-');
+  if (parts.length < 3) return null;
+
+  const year = Number(parts[0]);
+  const month = Number(parts[1]);
+  const day = Number(parts[2]);
+
+  if (!year || !month || !day) return null;
+
+  const dt = new Date(year, month - 1, day);
+  dt.setHours(0, 0, 0, 0);
+  return dt;
+}
+
+function isPastShow(sessionId) {
+  const showDate = parseSessionDate(sessionId);
+  if (!showDate) return false;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  return showDate < today;
+}
+
+async function loadSessionState() {
+  const res = await fetch(`/session/${encodeURIComponent(sessionId)}/state`, {
+    cache: 'no-store'
+  });
+
+  if (!res.ok) {
+    throw new Error(`GET /session/:id/state HTTP ${res.status}`);
+  }
+
+  return res.json();
+}
+
+function applyReadOnlyUI() {
+  document.getElementById('nameOverlay').style.display = 'none';
+  document.getElementById('clearButton').style.display = 'none';
+
+  const helperText = document.querySelector('#controlRow > div');
+  if (helperText) {
+    helperText.textContent = 'Archive mode — this show already happened. Picks are view-only.';
+  }
+
+  setSessionHeader(`Session: ${sessionId} • archive mode`);
+}
 
     let username = localStorage.getItem('setlist-username');
 
@@ -570,19 +621,54 @@
 
     // -------- Login + socket join --------
     async function finishLogin(name) {
-      username = name.trim();
-      if (!username) return;
+async function finishLogin(name) {
+  username = name.trim();
+  if (!username) return;
 
-      localStorage.setItem('setlist-username', username);
-      setSessionHeader(`Session: ${sessionId} • you are ${username}`);
+  localStorage.setItem('setlist-username', username);
+  setSessionHeader(`Session: ${sessionId} • you are ${username}`);
+  document.getElementById('nameOverlay').style.display = 'none';
 
-      document.getElementById('nameOverlay').style.display = 'none';
+  await loadSongs();
+  socket.emit('join', { sessionId, username });
+}
 
-      // ensure songs loaded before first render
-      await loadSongs();
+async function initSessionPage() {
+  IS_READ_ONLY = isPastShow(sessionId);
 
-      socket.emit('join', { sessionId, username });
+  await loadSongs();
+
+  if (IS_READ_ONLY) {
+    applyReadOnlyUI();
+
+    try {
+      CURRENT_SESSION_STATE = await loadSessionState();
+      renderGrid(CURRENT_SESSION_STATE);
+    } catch (e) {
+      console.error('[session state] load failed:', e);
+      alert('Could not load archived session.');
     }
+
+    return;
+  }
+
+  if (username) {
+    setSessionHeader(`Session: ${sessionId} • you are ${username}`);
+    document.getElementById('nameOverlay').style.display = 'none';
+    socket.emit('join', { sessionId, username });
+    return;
+  }
+
+  const btn = document.getElementById('nameSubmit');
+  const input = document.getElementById('nameInput');
+
+  btn.addEventListener('click', () => finishLogin(input.value));
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') finishLogin(input.value);
+  });
+}
+
+initSessionPage();
 
     if (username) {
       setSessionHeader(`Session: ${sessionId} • you are ${username}`);
@@ -611,8 +697,7 @@
 
       users.forEach(userObj => {
         const boardUser = userObj.username;
-        const isMyBoard = boardUser === username;
-
+  const isMyBoard = !IS_READ_ONLY && boardUser === username;
         const board = document.createElement('div');
         board.className = 'user-board';
 
@@ -726,8 +811,9 @@
             const saveCustom = () => {
               const val = input.value.trim();
               if (!val) return;
-              socket.emit('set-song', { sessionId, slot, value: val, username });
-            };
+              if (IS_READ_ONLY) return;
+if (IS_READ_ONLY) return;
+socket.emit('set-song', { sessionId, slot, value: val, username });
             input.addEventListener('keydown', (e) => { if (e.key === 'Enter') saveCustom(); });
             input.addEventListener('blur', saveCustom);
 
@@ -752,13 +838,15 @@
       });
     }
 
-    socket.on('update-session', (session) => {
-      renderGrid(session);
-    });
-
-    document.getElementById('clearButton').addEventListener('click', () => {
-      socket.emit('clear-all', { sessionId });
-    });
+socket.on('update-session', (session) => {
+  if (IS_READ_ONLY) return;
+  CURRENT_SESSION_STATE = session;
+  renderGrid(session);
+});
+document.getElementById('clearButton').addEventListener('click', () => {
+  if (IS_READ_ONLY) return;
+  socket.emit('clear-all', { sessionId });
+});
 
     document.getElementById('refreshSongsBtn').addEventListener('click', async () => {
       await loadSongs();

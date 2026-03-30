@@ -116,6 +116,17 @@ const mem = {
 function memEnsureSession(id) {
   if (!mem.sessions.has(id)) mem.sessions.set(id, { users: new Set(), picks: new Map() });
 }
+app.get('/session/:id/state', async (req, res) => {
+  try {
+    const sessionId = decodeURIComponent(req.params.id);
+    await api.ensureSession(sessionId);
+    const state = await api.buildState(sessionId);
+    res.json(state);
+  } catch (e) {
+    console.error('[GET STATE ERROR]', e);
+    res.status(500).json({ error: e.message });
+  }
+});
 function memEnsureUser(id, username) {
   memEnsureSession(id);
   mem.sessions.get(id).users.add(username);
@@ -254,6 +265,17 @@ app.get('/sessions', (req, res) => {
 // health
 app.get('/healthz', (req, res) => res.send('ok'));
 
+app.get('/session/:id/state', async (req, res) => {
+  try {
+    const sessionId = decodeURIComponent(req.params.id);
+    await api.ensureSession(sessionId);
+    const state = await api.buildState(sessionId);
+    res.json(state);
+  } catch (e) {
+    console.error('[GET STATE ERROR]', e);
+    res.status(500).json({ error: e.message });
+  }
+});
 // dbcheck
 app.get('/dbcheck', async (req, res) => {
   if (DB_DISABLED) return res.type('text').send('DB DISABLED (in-memory)');
