@@ -81,9 +81,7 @@ const PRESET_SESSIONS = [
   { id: '2026-03-12-indianapolis-in-the-vogue-theatre-1', title: 'Mar 12, 2026 — The Vogue Theatre (Indianapolis, IN)' },
   { id: '2026-03-13-detroit-mi-saint-andrews-hall-1', title: "Mar 13, 2026 — Saint Andrew's Hall (Detroit, MI)" },
   { id: '2026-03-14-columbus-oh-the-bluestone-1', title: 'Mar 14, 2026 — The Bluestone (Columbus, OH)' },
-
   { id: '2026-03-28-estes-park-co-frozen-dead-guy-days-coffin-race-1', title: 'Mar 28, 2026 — Frozen Dead Guy Days & Coffin Race (Estes Park, CO)' },
-
   { id: '2026-04-11-norfolk-va-the-norva', title: 'Apr 11, 2026 — The NorVa (Norfolk, VA)' },
   { id: '2026-04-24-buffalo-ny-town-ballroom', title: 'Apr 24, 2026 — Town Ballroom (Buffalo, NY)' },
   { id: '2026-04-25-buffalo-ny-town-ballroom', title: 'Apr 25, 2026 — Town Ballroom (Buffalo, NY)' },
